@@ -106,14 +106,15 @@ export const writeCitationSelectionToastPOC = (
   //     in case H is some unexpected type.
   //   - Replace ONLY the osc52 toast text with our hook indicator.
   //     Copy logic is upstream and unaffected.
-  // Single-line text only (multi-line was tried but pushes the
-  // commented content upward — bad UX). Real overlay dialog is being
-  // built as a separate patch (citationOverlayDialog) that mounts an
-  // absolutely-positioned Box, not a toast.
+  // After snapshotting the selection, trigger the Dn5 re-render
+  // callback that the overlay-dialog patch registers via useState/
+  // useEffect. Without this trigger Dn5 keeps its memoised result
+  // and the overlay only updates when something else changes the
+  // App tree (e.g. the user typing in the input).
   const patched = full
     .replace(
       `function ${fn}(${H}){`,
-      `function ${fn}(${H}){try{globalThis.__cc_last_selection__={text:typeof ${H}==="string"?${H}:"",ts:Date.now()}}catch(_e){}`
+      `function ${fn}(${H}){try{globalThis.__cc_last_selection__={text:typeof ${H}==="string"?${H}:"",ts:Date.now()};if(typeof globalThis.__cc_force_dn5_rerender==="function")globalThis.__cc_force_dn5_rerender()}catch(_e){}`
     )
     .replace(
       'case"osc52":' +
@@ -129,7 +130,7 @@ export const writeCitationSelectionToastPOC = (
         q +
         '} ${' +
         K +
-        '} \\xB7 overlay dialog (WIP) — c/q/esc not wired yet`'
+        '} \\xB7 citation overlay below`'
     );
 
   if (patched === full) {
