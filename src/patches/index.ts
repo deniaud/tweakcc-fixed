@@ -50,6 +50,7 @@ import { writePatchesAppliedIndication } from './patchesAppliedIndication';
 import { applySystemPrompts } from './systemPrompts';
 import { applyInlineBlobOverrides } from './inlineBlobOverrides';
 import { writeFixLspSupport } from './fixLspSupport';
+import { writeRewriteMode } from './rewriteMode';
 import { writeToolsets } from './toolsets';
 import { writeTableFormat } from './tableFormat';
 import { writeConversationTitle } from './conversationTitle';
@@ -80,6 +81,7 @@ import { writeReadDefaultLines } from './readDefaultLines';
 import { writeCitationPlaceholderParser } from './citationPlaceholderParser';
 import { writeCitationExpanderOnSend } from './citationExpanderOnSend';
 import { writeCitationSelectionToastPOC } from './citationSelectionToastPOC';
+import { writeCitationOverlayDialog } from './citationOverlayDialog';
 import {
   writeSuppressDeferredTools,
   writeStripEmptySystemReminders,
@@ -188,6 +190,13 @@ const PATCH_DEFINITIONS = [
     name: 'Fix LSP support',
     group: PatchGroup.ALWAYS_APPLIED,
     description: 'Enable/fix nascent LSP support',
+  },
+  {
+    id: 'rewrite-mode',
+    name: 'Rewrite mode (~ prefix)',
+    group: PatchGroup.ALWAYS_APPLIED,
+    description:
+      'Adds a `~`-prefix input mode parallel to `!` bash mode; shows "~ for rewrite mode" hint and forwards `~` to the UserPromptSubmit hook',
   },
   {
     id: 'statusline-update-throttle',
@@ -494,6 +503,13 @@ const PATCH_DEFINITIONS = [
       'Visible POC: replace the OSC52/copy toast `sent N chars via OSC 52 ...` with `Selected N chars · [c]opy [q]uote [esc] (tweakcc citation hook)`; snapshot the selected text into globalThis.__cc_last_selection__ for the future keyboard handler. Copy path is unchanged.',
   },
   {
+    id: 'citation-overlay-dialog',
+    name: 'Citation overlay dialog',
+    group: PatchGroup.FEATURES,
+    description:
+      "Render an inline Box-overlay dialog in CC's footer area (above the status line) whenever globalThis.__cc_last_selection__ is fresh. Uses the same rendering primitive as /help — short-circuits the footer renderer Dn5 with our own bordered Box, so the dialog appears over the empty space without pushing existing content upward. Keyboard handling (c/q/esc) is wired in a separate patch.",
+  },
+  {
     id: 'suppress-deferred-tools',
     name: 'Suppress deferred tools list (DANGEROUS)',
     group: PatchGroup.SYSTEM_REMINDERS,
@@ -793,6 +809,9 @@ export const applyCustomization = async (
     'fix-lsp-support': {
       fn: c => writeFixLspSupport(c),
     },
+    'rewrite-mode': {
+      fn: c => writeRewriteMode(c),
+    },
     'statusline-update-throttle': {
       fn: c =>
         writeStatuslineUpdateThrottle(
@@ -1057,6 +1076,10 @@ export const applyCustomization = async (
     },
     'citation-selection-toast-poc': {
       fn: c => writeCitationSelectionToastPOC(c),
+      condition: !!config.settings.misc?.enableCitationMode,
+    },
+    'citation-overlay-dialog': {
+      fn: c => writeCitationOverlayDialog(c),
       condition: !!config.settings.misc?.enableCitationMode,
     },
     'suppress-deferred-tools': {

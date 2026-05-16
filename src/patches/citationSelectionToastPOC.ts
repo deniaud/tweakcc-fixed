@@ -106,6 +106,10 @@ export const writeCitationSelectionToastPOC = (
   //     in case H is some unexpected type.
   //   - Replace ONLY the osc52 toast text with our hook indicator.
   //     Copy logic is upstream and unaffected.
+  // Single-line text only (multi-line was tried but pushes the
+  // commented content upward — bad UX). Real overlay dialog is being
+  // built as a separate patch (citationOverlayDialog) that mounts an
+  // absolutely-positioned Box, not a toast.
   const patched = full
     .replace(
       `function ${fn}(${H}){`,
@@ -125,7 +129,7 @@ export const writeCitationSelectionToastPOC = (
         q +
         '} ${' +
         K +
-        '} \\xB7 [c]opy  [q]uote  [esc]   (tweakcc citation hook)`'
+        '} \\xB7 overlay dialog (WIP) — c/q/esc not wired yet`'
     );
 
   if (patched === full) {
