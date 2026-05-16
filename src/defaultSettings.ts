@@ -719,6 +719,7 @@ export const DEFAULT_SETTINGS: Settings = {
     enableVoiceMode: false,
     enableVoiceConciseOutput: true,
     enableChannelsMode: false,
+    enableCitationMode: false,
     maxEffortDefault: false,
     autoModeClassifierModel: 'default',
     suppressDeferredTools: false,

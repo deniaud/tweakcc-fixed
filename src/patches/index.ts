@@ -77,6 +77,8 @@ import { writeAutoModeClassifierModel } from './autoModeClassifierModel';
 import { writeVoiceMode } from './voiceMode';
 import { writeChannelsMode } from './channelsMode';
 import { writeReadDefaultLines } from './readDefaultLines';
+import { writeCitationPlaceholderParser } from './citationPlaceholderParser';
+import { writeCitationExpanderOnSend } from './citationExpanderOnSend';
 import {
   writeSuppressDeferredTools,
   writeStripEmptySystemReminders,
@@ -468,6 +470,20 @@ const PATCH_DEFINITIONS = [
     group: PatchGroup.FEATURES,
     description:
       'Enable MCP channel notifications (--channels without allowlist or dev flag)',
+  },
+  {
+    id: 'citation-placeholder-parser',
+    name: 'Citation placeholder parser',
+    group: PatchGroup.FEATURES,
+    description:
+      'Teach CC\'s input parser/edit logic about [Pasted citation #N "preview"] placeholders alongside [Pasted text #N], [Image #N], [...Truncated text #N ...]',
+  },
+  {
+    id: 'citation-expander-on-send',
+    name: 'Citation expander on send',
+    group: PatchGroup.FEATURES,
+    description:
+      'Expand [Pasted citation #N] placeholders into a <assistant-quotes-with-comments> block before sending. Adds globalThis.__cc_citations__ registry with insertPlaceholder(text, comment).',
   },
   {
     id: 'suppress-deferred-tools',
@@ -1022,6 +1038,14 @@ export const applyCustomization = async (
     'channels-mode': {
       fn: c => writeChannelsMode(c),
       condition: !!config.settings.misc?.enableChannelsMode,
+    },
+    'citation-placeholder-parser': {
+      fn: c => writeCitationPlaceholderParser(c),
+      condition: !!config.settings.misc?.enableCitationMode,
+    },
+    'citation-expander-on-send': {
+      fn: c => writeCitationExpanderOnSend(c),
+      condition: !!config.settings.misc?.enableCitationMode,
     },
     'suppress-deferred-tools': {
       fn: c => writeSuppressDeferredTools(c),
