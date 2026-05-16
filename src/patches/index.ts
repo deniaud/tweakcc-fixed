@@ -79,6 +79,7 @@ import { writeChannelsMode } from './channelsMode';
 import { writeReadDefaultLines } from './readDefaultLines';
 import { writeCitationPlaceholderParser } from './citationPlaceholderParser';
 import { writeCitationExpanderOnSend } from './citationExpanderOnSend';
+import { writeCitationSelectionToastPOC } from './citationSelectionToastPOC';
 import {
   writeSuppressDeferredTools,
   writeStripEmptySystemReminders,
@@ -484,6 +485,13 @@ const PATCH_DEFINITIONS = [
     group: PatchGroup.FEATURES,
     description:
       'Expand [Pasted citation #N] placeholders into a <assistant-quotes-with-comments> block before sending. Adds globalThis.__cc_citations__ registry with insertPlaceholder(text, comment).',
+  },
+  {
+    id: 'citation-selection-toast-poc',
+    name: 'Citation selection toast (POC)',
+    group: PatchGroup.FEATURES,
+    description:
+      'Visible POC: replace the OSC52/copy toast `sent N chars via OSC 52 ...` with `Selected N chars · [c]opy [q]uote [esc] (tweakcc citation hook)`; snapshot the selected text into globalThis.__cc_last_selection__ for the future keyboard handler. Copy path is unchanged.',
   },
   {
     id: 'suppress-deferred-tools',
@@ -1045,6 +1053,10 @@ export const applyCustomization = async (
     },
     'citation-expander-on-send': {
       fn: c => writeCitationExpanderOnSend(c),
+      condition: !!config.settings.misc?.enableCitationMode,
+    },
+    'citation-selection-toast-poc': {
+      fn: c => writeCitationSelectionToastPOC(c),
       condition: !!config.settings.misc?.enableCitationMode,
     },
     'suppress-deferred-tools': {
