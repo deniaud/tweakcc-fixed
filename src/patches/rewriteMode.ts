@@ -47,17 +47,22 @@
 //      K.push(D8({content:q.hookSpecificOutput.additionalContext,isMeta:!0}));
 //    → K.push(D8({content:q.hookSpecificOutput.additionalContext,isMeta:!1}));
 //
-// 7. Rewrite-mode submit interceptor — two-step UX with scramble→erase intro
-//    and realtime streaming. Flow:
+// 7. Rewrite-mode submit interceptor — two-step UX with parallel anim+stream.
+//    Animation runs CONCURRENTLY with the network round-trip so the user
+//    doesn't sit through latency twice. Flow:
 //      1. Lock keyboard via mode="rewriting" (Patch 8 enforces).
-//      2. Scramble phase (4 frames × 40ms): each char of the user's text is
-//         replaced with random block-glyphs (▓░█▒◆◈) every frame.
-//      3. Erase phase (~8 frames × 30ms): text shrinks from the end toward 0.
-//      4. Stream phase: fetch with stream:true, parse SSE deltas, feed tokens
-//         into the input box as they arrive (via uA/setCursorOffset).
-//      5. On stream done: mode resets to "prompt" so user can edit/resubmit.
-//      6. On any failure (no API key, network error, parse error): original
-//         text is restored and mode resets so user can retry or submit as-is.
+//      2. Kick off fetch immediately; deltas accumulate into a buffer
+//         (_ac), but are NOT pushed into the input box until the
+//         animation finishes (so they don't mix with scramble glyphs).
+//      3. Concurrently run scramble (4 × 160ms) then erase (~8 × 120ms).
+//      4. Whichever finishes first wins: if animation finishes first,
+//         _animDone flips true and the buffered _ac flushes; subsequent
+//         deltas paste straight in. If the stream finishes first,
+//         _animCancelled aborts the anim chain and the final text is
+//         flushed in one shot.
+//      5. On stream done: mode resets to "prompt".
+//      6. On any failure: animation cancelled, original text restored,
+//         mode reset.
 //
 // 8. Typing-handler lockout for mode === "rewriting". Without this, any
 //    keystroke during the stream would land in the input buffer alongside
@@ -194,9 +199,9 @@ export const writeRewriteMode = (oldFile: string): string | null => {
       const setModeFn = setModeM[1];
       const refsObj = refsM[1];
 
-      // Streaming injection: animation (scramble→erase) → fetch SSE → realtime
-      // token paste-in. Lock keyboard via mode "rewriting" (Patch 8 enforces).
-      // On done/error: revert mode to prompt; on error: also restore original text.
+      // Parallel anim+stream injection. Shared state (_ac, _animDone,
+      // _animCancelled) lets fetch and animation race independently —
+      // whichever finishes first wins, the other no-ops on next tick.
       const inject =
         `if(${modeVar}==="rewrite"){try{` +
         `let _x=${textVar}.replace(/^~+/,""),` +
@@ -206,13 +211,12 @@ export const writeRewriteMode = (oldFile: string): string | null => {
         `_sp=require("fs").readFileSync((process.env.HOME||"")+"/.claude/hooks/enhance-prompt.system.md","utf8"),` +
         `_ep=process.env.CC_ENHANCE_ENDPOINT||"https://openrouter.ai/api/v1/chat/completions";` +
         `${setModeFn}("rewriting");` +
-        `let _orig=_x,_pool="\\u2593\\u2592\\u2591\\u2588\\u25C6\\u25C8",_scrF=0,_state=_orig,_ctrl,_to;` +
-        `let _doFetch=()=>{` +
-        `${setQueryFn}("");${refsObj}.setCursorOffset(0);` +
-        `_ctrl=new AbortController();_to=setTimeout(()=>_ctrl.abort(),15000);` +
+        `let _orig=_x,_pool="\\u2593\\u2592\\u2591\\u2588\\u25C6\\u25C8",_scrF=0,_state=_orig,_ac="",_animDone=false,_animCancelled=false;` +
+        `let _flush=()=>{${setQueryFn}(_ac);${refsObj}.setCursorOffset(_ac.length)};` +
+        `let _ctrl=new AbortController(),_to=setTimeout(()=>_ctrl.abort(),15000);` +
         `fetch(_ep,{method:"POST",signal:_ctrl.signal,headers:{"Authorization":"Bearer "+_k,"Content-Type":"application/json","Accept":"text/event-stream","HTTP-Referer":"https://claude.com/claude-code","X-Title":"cc-rewrite-mode-stream"},body:JSON.stringify({model:_md,max_tokens:500,temperature:0.2,stream:true,messages:[{role:"system",content:_sp},{role:"user",content:_x}]})}).then(async _r=>{` +
         `if(!_r.ok){throw new Error("HTTP "+_r.status)}` +
-        `let _rd=_r.body.getReader(),_dc=new TextDecoder(),_bf="",_ac="";` +
+        `let _rd=_r.body.getReader(),_dc=new TextDecoder(),_bf="";` +
         `while(true){` +
         `let{value:_v,done:_d}=await _rd.read();` +
         `if(_d)break;` +
@@ -226,21 +230,21 @@ export const writeRewriteMode = (oldFile: string): string | null => {
         `if(_pl==="[DONE]")continue;` +
         `try{` +
         `let _dt=JSON.parse(_pl),_de=_dt.choices&&_dt.choices[0]&&_dt.choices[0].delta&&_dt.choices[0].delta.content;` +
-        `if(_de){_ac+=_de;${setQueryFn}(_ac);${refsObj}.setCursorOffset(_ac.length)}` +
+        `if(_de){_ac+=_de;if(_animDone)_flush()}` +
         `}catch(_){}` +
         `}` +
         `}` +
         `clearTimeout(_to);` +
-        `${setModeFn}("prompt");` +
-        `${refsObj}.setCursorOffset(_ac.length)` +
+        `_animCancelled=true;_animDone=true;_flush();` +
+        `${setModeFn}("prompt")` +
         `}).catch(_e=>{` +
         `clearTimeout(_to);` +
-        `${setQueryFn}(_x);` +
-        `${refsObj}.setCursorOffset(_x.length);` +
+        `_animCancelled=true;` +
+        `${setQueryFn}(_x);${refsObj}.setCursorOffset(_x.length);` +
         `${setModeFn}("prompt")` +
         `});` +
-        `};` +
         `let _anim=()=>{` +
+        `if(_animCancelled)return;` +
         `if(_scrF<4){` +
         `let _t="";` +
         `for(let _i=0;_i<_state.length;_i++)_t+=_pool[Math.floor(Math.random()*_pool.length)];` +
@@ -251,9 +255,9 @@ export const writeRewriteMode = (oldFile: string): string | null => {
         `_state=_state.slice(0,Math.max(0,_state.length-_dr));` +
         `${setQueryFn}(_state);${refsObj}.setCursorOffset(_state.length);` +
         `setTimeout(_anim,120)` +
-        `}else{_doFetch()}` +
+        `}else{_animDone=true;_flush()}` +
         `};` +
-        `if(_orig.length===0)_doFetch();else _anim();` +
+        `if(_orig.length===0){_animDone=true}else{_anim()}` +
         `return` +
         `}` +
         `}catch(_e){}}`;
