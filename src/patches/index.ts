@@ -83,6 +83,7 @@ import { writeCitationExpanderOnSend } from './citationExpanderOnSend';
 import { writeCitationSelectionToastPOC } from './citationSelectionToastPOC';
 import { writeCitationOverlayDialog } from './citationOverlayDialog';
 import { writeCitationForceRerender } from './citationForceRerender';
+import { writeCitationKeyboardHandler } from './citationKeyboardHandler';
 import {
   writeSuppressDeferredTools,
   writeStripEmptySystemReminders,
@@ -516,6 +517,13 @@ const PATCH_DEFINITIONS = [
     group: PatchGroup.FEATURES,
     description:
       "Adds a useState+useEffect into Dn5's caller scope (the prompt-input wrapper, which has full wq.useState/useEffect React access) that registers globalThis.__cc_force_dn5_rerender. The MG8 toast formatter calls this callback right after recording a selection, which triggers a setState in the caller and causes Dn5 to re-render with the freshly-recorded selection. Without this patch the overlay only updates when an unrelated re-render happens (e.g. typing in the input).",
+  },
+  {
+    id: 'citation-keyboard-handler',
+    name: 'Citation keyboard hotkeys (c/q/Esc)',
+    group: PatchGroup.FEATURES,
+    description:
+      "Intercept c/q/Esc keystrokes in I9 (onKeyDownBefore) when citation overlay is active: Esc → dismiss, c → dismiss (OSC52 already copied on selection), q → insert [Pasted citation #N] placeholder into the main input via insertTextRef.current.insert(). Also exposes globalThis.__cc_input_ref for the insert API.",
   },
   {
     id: 'suppress-deferred-tools',
@@ -1091,13 +1099,15 @@ export const applyCustomization = async (
       condition: !!config.settings.misc?.enableCitationMode,
     },
     'citation-force-rerender': {
-      // DISABLED: caused React error #300 (Rules of Hooks violation
-      // somewhere in the `in5` prompt-input wrapper component, even
-      // though my anchor sits before any conditional returns in the
-      // function body). Re-enable only after rewriting the injection
-      // to use a separate child component with its own hooks.
+      // Rewritten as isolated child component (defined at module scope,
+      // mounted as sibling of Dn5 with own hooks) — no more in5 hook
+      // injection, bg-spare React #300 fixed.
       fn: c => writeCitationForceRerender(c),
-      condition: false,
+      condition: !!config.settings.misc?.enableCitationMode,
+    },
+    'citation-keyboard-handler': {
+      fn: c => writeCitationKeyboardHandler(c),
+      condition: !!config.settings.misc?.enableCitationMode,
     },
     'suppress-deferred-tools': {
       fn: c => writeSuppressDeferredTools(c),
