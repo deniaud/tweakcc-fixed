@@ -80,10 +80,9 @@ import { writeChannelsMode } from './channelsMode';
 import { writeReadDefaultLines } from './readDefaultLines';
 import { writeCitationPlaceholderParser } from './citationPlaceholderParser';
 import { writeCitationExpanderOnSend } from './citationExpanderOnSend';
-import { writeCitationSelectionToastPOC } from './citationSelectionToastPOC';
-import { writeCitationOverlayDialog } from './citationOverlayDialog';
-import { writeCitationForceRerender } from './citationForceRerender';
+import { writeCitationSelectionToast } from './citationSelectionToast';
 import { writeCitationKeyboardHandler } from './citationKeyboardHandler';
+import { writeCitationToolJsxBridge } from './citationToolJsxBridge';
 import {
   writeSuppressDeferredTools,
   writeStripEmptySystemReminders,
@@ -498,32 +497,25 @@ const PATCH_DEFINITIONS = [
       'Expand [Pasted citation #N] placeholders into a <assistant-quotes-with-comments> block before sending. Adds globalThis.__cc_citations__ registry with insertPlaceholder(text, comment).',
   },
   {
-    id: 'citation-selection-toast-poc',
-    name: 'Citation selection toast (POC)',
+    id: 'citation-selection-toast',
+    name: 'Citation selection hook',
     group: PatchGroup.FEATURES,
     description:
-      'Visible POC: replace the OSC52/copy toast `sent N chars via OSC 52 ...` with `Selected N chars · [c]opy [q]uote [esc] (tweakcc citation hook)`; snapshot the selected text into globalThis.__cc_last_selection__ for the future keyboard handler. Copy path is unchanged.',
-  },
-  {
-    id: 'citation-overlay-dialog',
-    name: 'Citation overlay dialog',
-    group: PatchGroup.FEATURES,
-    description:
-      "Render an inline Box-overlay dialog in CC's footer area (above the status line) whenever globalThis.__cc_last_selection__ is fresh. Uses the same rendering primitive as /help — short-circuits the footer renderer Dn5 with our own bordered Box, so the dialog appears over the empty space without pushing existing content upward. Keyboard handling (c/q/esc) is wired in a separate patch.",
-  },
-  {
-    id: 'citation-force-rerender',
-    name: 'Citation force-rerender',
-    group: PatchGroup.FEATURES,
-    description:
-      "Adds a useState+useEffect into Dn5's caller scope (the prompt-input wrapper, which has full wq.useState/useEffect React access) that registers globalThis.__cc_force_dn5_rerender. The MG8 toast formatter calls this callback right after recording a selection, which triggers a setState in the caller and causes Dn5 to re-render with the freshly-recorded selection. Without this patch the overlay only updates when an unrelated re-render happens (e.g. typing in the input).",
+      'Replaces the OSC52 toast text with `Selected N chars · citation modal…`, snapshots the selection into globalThis.__cc_last_selection__, and opens the citation modal via globalThis.__cc_open_citation_modal(text). OSC 52 clipboard copy itself is preserved upstream.',
   },
   {
     id: 'citation-keyboard-handler',
-    name: 'Citation keyboard hotkeys (c/q/Esc)',
+    name: 'Citation input-ref expose',
     group: PatchGroup.FEATURES,
     description:
-      "Intercept c/q/Esc keystrokes in I9 (onKeyDownBefore) when citation overlay is active: Esc → dismiss, c → dismiss (OSC52 already copied on selection), q → insert [Pasted citation #N] placeholder into the main input via insertTextRef.current.insert(). Also exposes globalThis.__cc_input_ref for the insert API.",
+      "Exposes globalThis.__cc_input_ref so the citation modal can insert the [Pasted citation #N] placeholder via .current.insert(). I9 keystroke interception removed in iter2 once the modal moved to setToolJSX, which auto-disables I9.",
+  },
+  {
+    id: 'citation-tool-jsx-bridge',
+    name: 'Citation modal (full-screen via setToolJSX)',
+    group: PatchGroup.FEATURES,
+    description:
+      "Replaces the empty useEffect in App ($r6) with one that exposes lK (setToolJSX) globally, defines globalThis.__cc_CitationModal (React component with Custom/Copy/Cancel + arrow nav + comment text input + process.stdin listener), and globalThis.__cc_open_citation_modal(text). MG8 calls the opener on selection — modal renders full-screen via NB6's modal prop, same as /help.",
   },
   {
     id: 'suppress-deferred-tools',
@@ -1090,23 +1082,16 @@ export const applyCustomization = async (
       fn: c => writeCitationExpanderOnSend(c),
       condition: !!config.settings.misc?.enableCitationMode,
     },
-    'citation-selection-toast-poc': {
-      fn: c => writeCitationSelectionToastPOC(c),
-      condition: !!config.settings.misc?.enableCitationMode,
-    },
-    'citation-overlay-dialog': {
-      fn: c => writeCitationOverlayDialog(c),
-      condition: !!config.settings.misc?.enableCitationMode,
-    },
-    'citation-force-rerender': {
-      // Rewritten as isolated child component (defined at module scope,
-      // mounted as sibling of Dn5 with own hooks) — no more in5 hook
-      // injection, bg-spare React #300 fixed.
-      fn: c => writeCitationForceRerender(c),
+    'citation-selection-toast': {
+      fn: c => writeCitationSelectionToast(c),
       condition: !!config.settings.misc?.enableCitationMode,
     },
     'citation-keyboard-handler': {
       fn: c => writeCitationKeyboardHandler(c),
+      condition: !!config.settings.misc?.enableCitationMode,
+    },
+    'citation-tool-jsx-bridge': {
+      fn: c => writeCitationToolJsxBridge(c),
       condition: !!config.settings.misc?.enableCitationMode,
     },
     'suppress-deferred-tools': {

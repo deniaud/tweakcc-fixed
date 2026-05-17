@@ -39,17 +39,23 @@
 //
 // Expansion format:
 //
-//   <assistant-quotes-with-comments>
-//   Below are passages from your previous reply that the user is highlighting, with their comments where applicable.
+//   <quotes>
+//   Below are passages from your previous replies that the user highlighted.
 //
-//   you: "<text 1>"
-//   you: "<text 2>"
-//   But: <comment 2>
-//   you: "<text 3>"
-//   But: <comment 3>
-//   </assistant-quotes-with-comments>
+//   quote: "<text 1>"
+//   quote: "<text 2>"
+//   note: <comment 2>
+//
+//   quote: "<text 3>"
+//   note: <comment 3>
+//   </quotes>
 //
 //   <remaining user text with placeholders stripped>
+//
+// Spacing rule: a blank line is inserted between groups. A group ends
+// at the next `note:` line (or at end of list). A quote without a note
+// is "glued" to the next quote — they belong to the same group, which
+// closes when one of them has a note.
 
 import { showDiff } from './index';
 
@@ -67,7 +73,7 @@ const EXPANDER_PATTERN =
 // `function` declarations in the bundle without inventing extra
 // semicolons or affecting hoisting.
 const CITATION_RUNTIME =
-  ';(function(){if(globalThis.__cc_citations__)return;var R=globalThis.__cc_citations__={nextId:1,items:new Map(),add:function(t,c){var i=this.nextId++;this.items.set(i,{text:t,comment:c||""});return i},get:function(i){return this.items.get(i)},clear:function(){this.items.clear()},preview:function(t,m){m=m||32;var s=String(t==null?"":t).replace(/\\s+/g," ").trim();return s.length>m?s.slice(0,m-1)+"\\u2026":s},insertPlaceholder:function(t,c){var i=this.add(t,c);return "[Pasted citation #"+i+" \\""+this.preview(t).replace(/"/g,"\'")+"\\"]"}};globalThis.__cc_expand_citations=function(text){if(!text||typeof text!=="string")return text;var reg=globalThis.__cc_citations__;if(!reg||!reg.items||reg.items.size===0)return text;var re=/\\[Pasted citation #(\\d+)(?: "[^"]*")?\\]/g;var matches=[];var m;while((m=re.exec(text))!==null){var id=parseInt(m[1],10);var entry=reg.items.get(id);if(entry)matches.push({id:id,match:m[0],index:m.index,entry:entry})}if(matches.length===0)return text;var stripped=text;for(var i=matches.length-1;i>=0;i--){var x=matches[i];stripped=stripped.slice(0,x.index)+stripped.slice(x.index+x.match.length)}stripped=stripped.replace(/[ \\t]+/g," ").replace(/\\s*\\n\\s*/g,"\\n").trim();var header="Below are passages from your previous reply that the user is highlighting, with their comments where applicable.";var lines=[header,""];for(var j=0;j<matches.length;j++){var e=matches[j].entry;var safeText=String(e.text).replace(/\\\\/g,"\\\\\\\\").replace(/"/g,"\\\\\\"").replace(/\\n/g," ");lines.push("you: \\""+safeText+"\\"");if(e.comment&&e.comment.length>0){lines.push("But: "+e.comment)}}var block="<assistant-quotes-with-comments>\\n"+lines.join("\\n")+"\\n</assistant-quotes-with-comments>";return block+(stripped?"\\n\\n"+stripped:"")}})();';
+  ';(function(){if(globalThis.__cc_citations__)return;var R=globalThis.__cc_citations__={nextId:1,items:new Map(),add:function(t,c){var i=this.nextId++;this.items.set(i,{text:t,comment:c||""});return i},get:function(i){return this.items.get(i)},clear:function(){this.items.clear()},preview:function(t,m){m=m||32;var s=String(t==null?"":t).replace(/\\s+/g," ").trim();return s.length>m?s.slice(0,m-1)+"\\u2026":s},insertPlaceholder:function(t,c){var i=this.add(t,c);return "[Pasted citation #"+i+" \\""+this.preview(t).replace(/"/g,"\'")+"\\"]"}};globalThis.__cc_expand_citations=function(text){if(!text||typeof text!=="string")return text;var reg=globalThis.__cc_citations__;if(!reg||!reg.items||reg.items.size===0)return text;var re=/\\[Pasted citation #(\\d+)(?: "[^"]*")?\\]/g;var matches=[];var m;while((m=re.exec(text))!==null){var id=parseInt(m[1],10);var entry=reg.items.get(id);if(entry)matches.push({id:id,match:m[0],index:m.index,entry:entry})}if(matches.length===0)return text;var stripped=text;for(var i=matches.length-1;i>=0;i--){var x=matches[i];stripped=stripped.slice(0,x.index)+stripped.slice(x.index+x.match.length)}stripped=stripped.replace(/[ \\t]+/g," ").replace(/\\s*\\n\\s*/g,"\\n").trim();var header="Below are passages from your previous replies that the user highlighted.";var lines=[header,""];var prevHadNote=false;for(var j=0;j<matches.length;j++){var e=matches[j].entry;if(prevHadNote)lines.push("");prevHadNote=false;var safeText=String(e.text).replace(/\\\\/g,"\\\\\\\\").replace(/"/g,"\\\\\\"").replace(/\\n/g," ");lines.push("quote: \\""+safeText+"\\"");if(e.comment&&e.comment.length>0){lines.push("note: "+e.comment);prevHadNote=true}}var block="<quotes>\\n"+lines.join("\\n")+"\\n</quotes>";return block+(stripped?"\\n\\n"+stripped:"")}})();';
 
 export const writeCitationExpanderOnSend = (oldFile: string): string | null => {
   const match = oldFile.match(EXPANDER_PATTERN);
