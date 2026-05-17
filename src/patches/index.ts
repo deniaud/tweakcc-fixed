@@ -1091,8 +1091,13 @@ export const applyCustomization = async (
       condition: !!config.settings.misc?.enableCitationMode,
     },
     'citation-force-rerender': {
+      // DISABLED: caused React error #300 (Rules of Hooks violation
+      // somewhere in the `in5` prompt-input wrapper component, even
+      // though my anchor sits before any conditional returns in the
+      // function body). Re-enable only after rewriting the injection
+      // to use a separate child component with its own hooks.
       fn: c => writeCitationForceRerender(c),
-      condition: !!config.settings.misc?.enableCitationMode,
+      condition: false,
     },
     'suppress-deferred-tools': {
       fn: c => writeSuppressDeferredTools(c),
