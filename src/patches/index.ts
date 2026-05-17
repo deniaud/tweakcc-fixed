@@ -82,6 +82,7 @@ import { writeCitationPlaceholderParser } from './citationPlaceholderParser';
 import { writeCitationExpanderOnSend } from './citationExpanderOnSend';
 import { writeCitationSelectionToastPOC } from './citationSelectionToastPOC';
 import { writeCitationOverlayDialog } from './citationOverlayDialog';
+import { writeCitationForceRerender } from './citationForceRerender';
 import {
   writeSuppressDeferredTools,
   writeStripEmptySystemReminders,
@@ -508,6 +509,13 @@ const PATCH_DEFINITIONS = [
     group: PatchGroup.FEATURES,
     description:
       "Render an inline Box-overlay dialog in CC's footer area (above the status line) whenever globalThis.__cc_last_selection__ is fresh. Uses the same rendering primitive as /help — short-circuits the footer renderer Dn5 with our own bordered Box, so the dialog appears over the empty space without pushing existing content upward. Keyboard handling (c/q/esc) is wired in a separate patch.",
+  },
+  {
+    id: 'citation-force-rerender',
+    name: 'Citation force-rerender',
+    group: PatchGroup.FEATURES,
+    description:
+      "Adds a useState+useEffect into Dn5's caller scope (the prompt-input wrapper, which has full wq.useState/useEffect React access) that registers globalThis.__cc_force_dn5_rerender. The MG8 toast formatter calls this callback right after recording a selection, which triggers a setState in the caller and causes Dn5 to re-render with the freshly-recorded selection. Without this patch the overlay only updates when an unrelated re-render happens (e.g. typing in the input).",
   },
   {
     id: 'suppress-deferred-tools',
@@ -1080,6 +1088,10 @@ export const applyCustomization = async (
     },
     'citation-overlay-dialog': {
       fn: c => writeCitationOverlayDialog(c),
+      condition: !!config.settings.misc?.enableCitationMode,
+    },
+    'citation-force-rerender': {
+      fn: c => writeCitationForceRerender(c),
       condition: !!config.settings.misc?.enableCitationMode,
     },
     'suppress-deferred-tools': {

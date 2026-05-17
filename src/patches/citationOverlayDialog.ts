@@ -44,35 +44,20 @@ import { showDiff } from './index';
 const DN5_PATTERN =
   /function ([$\w]+)\(H\)\{let \$=([$\w]+)\.c\(74\),(?=\{[^}]{50,1000}helpOpen:)/;
 
-// Production overlay with explicit re-render mechanism.
+// Production overlay.
 //
-// Dn5 is memoised by CC's render compiler — it reads
-// `globalThis.__cc_last_selection__` outside of React's tracking, so
-// just mutating that global does NOT cause Dn5 to re-render.
+// Dn5's scope exposes only a5.createElement / a5.Fragment — no hooks.
+// Force-rerender plumbing lives in citationForceRerender patch which
+// hooks into Dn5's *caller* scope (where wq.useState/useEffect are
+// available) and registers globalThis.__cc_force_dn5_rerender.
 //
-// Fix: register a force-rerender callback through React's useState +
-// useEffect. The MG8 toast-formatter calls this callback right after
-// updating __cc_last_selection__, which triggers a fresh Dn5 render
-// that reads the current selection.
-//
-// useState / useEffect are placed BEFORE the original `c0$.c(74)`
-// memo-cache call — React Forget's compiler cache (`c0$.c(N)`) is
-// separate from React's own hook state, so adding our hooks in front
-// does not shift any indices in that cache.
+// Here we only read globalThis.__cc_last_selection__ on each Dn5
+// render and short-circuit the footer when a fresh, non-dismissed
+// selection is present. The caller's setState fires when MG8 invokes
+// the rerender callback after a copy event, which causes Dn5 to be
+// re-rendered with the fresh global state.
 const CITATION_OVERLAY_RUNTIME =
   '/*__cc citation overlay__*/' +
-  // 1. Register a re-render trigger that MG8 can call.
-  'try{' +
-  'var __ccPair=a5.useState(0);' +
-  'var __ccSetTick=__ccPair[1];' +
-  'a5.useEffect(function(){' +
-  'globalThis.__cc_force_dn5_rerender=function(){__ccSetTick(Date.now())};' +
-  'return function(){globalThis.__cc_force_dn5_rerender=null}' +
-  '},[]);' +
-  '}catch(__ccEhook){' +
-  'try{globalThis.__cc_dn5_hook_err=String(__ccEhook&&__ccEhook.message||__ccEhook)}catch(__ccE2){}' +
-  '}' +
-  // 2. Render overlay if there is a fresh, non-dismissed selection.
   'try{' +
   'var __ccS=globalThis.__cc_last_selection__;' +
   'if(__ccS&&typeof __ccS.text==="string"&&__ccS.text.length>0&&' +
