@@ -21,25 +21,46 @@ Native installations use `node-lief` to extract JS from the Bun bundle, patch, t
 Current setup (verify with `git remote -v`):
 
 ```
-origin    https://github.com/skrabe/tweakcc-fixed       (user's fork — push target)
-upstream  https://github.com/Piebald-AI/tweakcc         (Piebald — actively maintained source)
+origin    https://github.com/deniaud/tweakcc-fixed      (this user's fork — push target)
+upstream  https://github.com/skrabe/tweakcc-fixed       (skrabe's fork — pull updates from here)
 ```
 
-`skrabe/tweakcc-fixed` is a **direct fork of `Piebald-AI/tweakcc`** carrying cherry-picked fixes from open upstream PRs (#601, #646, #655, #664) plus fork-only patches that aren't upstreamed yet (Bun wrapper crash scoping, CC 2.1.113/2.1.126 regex shape adapts, the userMessageDisplay rewrite arc, thinkingVerbs past-tense, max-effort default, sessionMemory graceful no-op, TS7/Linux native patching).
+The fork chain is two hops:
 
-**Historical note for context:** the fork used to be `skrabe/tweakcc-fixed → BenIsLegit/tweakcc-fixed → Piebald-AI/tweakcc` (2-hop fork chain). Ben's fork went unmaintained at 2026-04-22, so on 2026-05-05 we deleted the GH fork, re-forked directly off Piebald, and cherry-picked Ben's still-useful commits onto the new branch. There is no longer a `ben` remote and no longer a fork-of-fork relationship. If you find documentation referring to one, it's stale.
+```
+deniaud/tweakcc-fixed  →  skrabe/tweakcc-fixed  →  Piebald-AI/tweakcc
+```
+
+`skrabe/tweakcc-fixed` is a direct fork of `Piebald-AI/tweakcc` and carries cherry-picked fixes from open upstream PRs (#601, #646, #655, #664) plus fork-only patches that haven't been upstreamed yet: Bun wrapper crash scoping, CC 2.1.113/2.1.126 regex shape adapts, the userMessageDisplay rewrite arc, thinkingVerbs past-tense, max-effort default, sessionMemory graceful no-op, TS7/Linux native patching.
+
+`deniaud/tweakcc-fixed` sits on top of skrabe's fork and carries deniaud-only experiments that aren't ready to push back up to skrabe yet — for example the citation/rewrite-mode arc on `feature/citation-modal`, and adapter fixes like the statusline-throttle regex for CC 2.1.143 shape (`HC(()=>{R()},300)`).
+
+**Historical note for context:** earlier the chain was `skrabe/tweakcc-fixed → BenIsLegit/tweakcc-fixed → Piebald-AI/tweakcc` (Ben sat between skrabe and Piebald). Ben's fork went unmaintained at 2026-04-22, so on 2026-05-05 skrabe deleted the GH fork, re-forked directly off Piebald, and cherry-picked Ben's still-useful commits onto the new branch. The current 2-hop chain (deniaud → skrabe → Piebald) is a *different* 2-hop chain introduced later when deniaud forked skrabe to carry experiments locally. If you find documentation claiming there is no fork-of-fork relationship anymore, or referring to a `ben` remote, it's stale.
 
 ### Syncing with upstream
 
+Since Piebald isn't a direct remote here, Piebald's prompt drops and patch updates reach us in two hops. The recommended path waits for skrabe to merge Piebald first, then we pull from skrabe:
+
 ```bash
 git -C ~/dev/tweakcc-fixed fetch upstream
-git -C ~/dev/tweakcc-fixed merge upstream/main         # most upstream pushes are pure prompt drops, conflict-free
+git -C ~/dev/tweakcc-fixed merge upstream/main         # skrabe's main, which already merged Piebald
 # Resolve conflicts only when our fork-only commits touch the same files
 pnpm build && pnpm test
-git push origin main
+git push origin main                                    # → deniaud/tweakcc-fixed
 ```
 
-When one of our cherry-picked open upstream PRs eventually gets merged upstream, the next `git merge upstream/main` will recognize the same change is on both sides and the duplicate disappears cleanly — no manual intervention needed.
+If you need Piebald *directly* (skrabe hasn't synced yet but you need a new prompt drop now), add a temporary `piebald` remote:
+
+```bash
+git remote add piebald https://github.com/Piebald-AI/tweakcc.git
+git fetch piebald
+git merge piebald/main
+git remote remove piebald                               # keep the chain clean afterwards
+```
+
+When skrabe later merges the same Piebald content, `git merge upstream/main` will recognize identical changes on both sides and dedupe cleanly — no manual intervention needed.
+
+When one of skrabe's cherry-picked open upstream PRs eventually gets merged in Piebald, the same dedupe happens on the next `upstream/main` merge.
 
 ## Bug classes — diagnostics, not recipes
 
