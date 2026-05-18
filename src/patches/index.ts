@@ -77,11 +77,6 @@ import { writeAutoModeClassifierModel } from './autoModeClassifierModel';
 import { writeVoiceMode } from './voiceMode';
 import { writeChannelsMode } from './channelsMode';
 import { writeReadDefaultLines } from './readDefaultLines';
-import { writeCitationPlaceholderParser } from './citationPlaceholderParser';
-import { writeCitationExpanderOnSend } from './citationExpanderOnSend';
-import { writeCitationSelectionToastPOC } from './citationSelectionToastPOC';
-import { writeCitationOverlayDialog } from './citationOverlayDialog';
-import { writeCitationForceRerender } from './citationForceRerender';
 import {
   writeSuppressDeferredTools,
   writeStripEmptySystemReminders,
@@ -473,41 +468,6 @@ const PATCH_DEFINITIONS = [
     group: PatchGroup.FEATURES,
     description:
       'Enable MCP channel notifications (--channels without allowlist or dev flag)',
-  },
-  {
-    id: 'citation-placeholder-parser',
-    name: 'Citation placeholder parser',
-    group: PatchGroup.FEATURES,
-    description:
-      'Teach CC\'s input parser/edit logic about [Pasted citation #N "preview"] placeholders alongside [Pasted text #N], [Image #N], [...Truncated text #N ...]',
-  },
-  {
-    id: 'citation-expander-on-send',
-    name: 'Citation expander on send',
-    group: PatchGroup.FEATURES,
-    description:
-      'Expand [Pasted citation #N] placeholders into a <assistant-quotes-with-comments> block before sending.',
-  },
-  {
-    id: 'citation-selection-toast-poc',
-    name: 'Citation selection toast (POC)',
-    group: PatchGroup.FEATURES,
-    description:
-      'Replace OSC52 toast text + snapshot selection into globalThis.__cc_last_selection__.',
-  },
-  {
-    id: 'citation-overlay-dialog',
-    name: 'Citation overlay dialog (legacy, Dn5 slot)',
-    group: PatchGroup.FEATURES,
-    description:
-      'Legacy footer-slot overlay rendered from Dn5. Superseded by citation-force-rerender which mounts an auto-updating overlay as a sibling of Dn5.',
-  },
-  {
-    id: 'citation-force-rerender',
-    name: 'Citation force-rerender (auto-updating overlay)',
-    group: PatchGroup.FEATURES,
-    description:
-      'Mount __cc_CitationOverlay as a sibling of Dn5 inside in5\'s return tree. The overlay has its own hooks (wq.useState + wq.useEffect) so it auto-updates when MG8 invokes the force-rerender callback after every copy event.',
   },
   {
     id: 'suppress-deferred-tools',
@@ -1062,26 +1022,6 @@ export const applyCustomization = async (
     'channels-mode': {
       fn: c => writeChannelsMode(c),
       condition: !!config.settings.misc?.enableChannelsMode,
-    },
-    'citation-placeholder-parser': {
-      fn: c => writeCitationPlaceholderParser(c),
-      condition: !!config.settings.misc?.enableCitationMode,
-    },
-    'citation-expander-on-send': {
-      fn: c => writeCitationExpanderOnSend(c),
-      condition: !!config.settings.misc?.enableCitationMode,
-    },
-    'citation-selection-toast-poc': {
-      fn: c => writeCitationSelectionToastPOC(c),
-      condition: !!config.settings.misc?.enableCitationMode,
-    },
-    'citation-overlay-dialog': {
-      fn: c => writeCitationOverlayDialog(c),
-      condition: false,
-    },
-    'citation-force-rerender': {
-      fn: c => writeCitationForceRerender(c),
-      condition: !!config.settings.misc?.enableCitationMode,
     },
     'suppress-deferred-tools': {
       fn: c => writeSuppressDeferredTools(c),
