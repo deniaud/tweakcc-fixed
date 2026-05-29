@@ -1463,6 +1463,35 @@ function repackELFSection(
       );
     }
 
+    // Guard against catastrophic file bloat. The new .bun section is placed
+    // inside the single RW PT_LOAD segment, so its file offset is tied to its
+    // virtual address: extend() pads the file to bridge the distance between the
+    // segment's current end and `newVaddr`. Decomposing the arithmetic,
+    //   extensionSize = (newVaddr - rwSegmentEnd) + alignedNewSize
+    // i.e. the wasteful NUL padding is exactly the virtual-address gap between
+    // the end of the RW segment and where nextVirtualAddress() placed the blob.
+    // For a compact Bun layout that gap is tens of MB (observed ~18MB on CC
+    // 2.1.146). But when Bun lays the .bun blob at a sparse high vaddr,
+    // nextVirtualAddress() returns a value hundreds of MB past the segment, so
+    // the padding explodes (observed: a 236MB binary ballooning to ~1.2GB, which
+    // then failed to boot with "Cannot access '<var>' before initialization").
+    // Bound the padding directly — independent of the JS blob size — and abort
+    // loudly rather than silently emitting a multi-GB, unbootable binary.
+    const vaddrGapPadding = extensionSize - alignedNewSize;
+    const MAX_VADDR_GAP = BigInt(128 * 1024 * 1024); // 128 MiB
+    if (vaddrGapPadding > MAX_VADDR_GAP) {
+      throw new Error(
+        `repackELFSection: refusing to pad the binary with ${vaddrGapPadding} ` +
+          `bytes of NUL to embed ${newContentSize} bytes of .bun data. The new ` +
+          `section vaddr 0x${newVaddr.toString(16)} sits far past the RW segment ` +
+          `(vaddr 0x${rwSegment.virtualAddress.toString(16)}); extending the ` +
+          `single PT_LOAD segment across that virtual-address gap would bloat the ` +
+          `file by the gap. This Claude Code build's ELF layout is not supported ` +
+          `by the .bun repack path — refusing to produce a bloated, unbootable ` +
+          `binary.`
+      );
+    }
+
     debug(
       `repackELFSection: moving .bun to offset=0x${newFileOffset.toString(16)}, vaddr=0x${newVaddr.toString(16)}, size=0x${newContentSize.toString(16)}`
     );
