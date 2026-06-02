@@ -155,6 +155,26 @@ export function resolveNixBinaryWrapper(binaryPath: string): string | null {
 const BUN_TRAILER = Buffer.from('\n---- Bun! ----\n');
 const BUN_BYTECODE_PREFIX = '// @bun @bytecode';
 
+// CC 2.1.156+ (Bun v1.3.14) ships the claude module in Bun's `@bun-cjs`
+// format: `contents` holds the FULL CJS-wrapped source —
+// `// @bun @bytecode @bun-cjs\n(function(exports, require, module, __filename,
+// __dirname) {…body…})` — and Bun's standalone loader evaluates `contents`
+// expecting it to return a callable (the function expression). Patches that
+// edit the body are fine, but patches that PREPEND top-level code (e.g.
+// scrollEscapeSequenceFilter) would land OUTSIDE the function wrapper and
+// break the "evaluates to a function" invariant → boot fails with
+// "Expected CommonJS module to have a function wrapper".
+//
+// So for @bun-cjs we unwrap the source to its inner body before patching and
+// re-wrap it on repack. extract sets this; repackNativeInstallation consumes
+// it (both live in this module and run in the same process within one apply).
+let bunCjsWrapper: { prefix: Buffer; suffix: Buffer } | null = null;
+
+// Matches `// @bun @bytecode …<newline>(function(<args>) {` at the start of a
+// @bun-cjs module's contents. Captures the whole prefix up to and including
+// the function body's opening brace.
+const BUN_CJS_PREFIX_RE = /^\/\/ @bun @bytecode[^\n]*\n\(function\([^)]*\)\s*\{/;
+
 // Size constants for binary structures
 const SIZEOF_OFFSETS = 32;
 const SIZEOF_STRING_POINTER = 8;
@@ -886,9 +906,36 @@ export function extractClaudeJsFromNativeInstallation(
 
     if (result) {
       const head = result.subarray(0, 30).toString('utf8');
+      // Reset any wrapper state from a previous call.
+      bunCjsWrapper = null;
+
       if (head.startsWith(BUN_BYTECODE_PREFIX)) {
+        // @bun-cjs: the contents are the CJS-wrapped source itself (see the
+        // note on `bunCjsWrapper`). Unwrap to the inner function body, patch
+        // that, and re-wrap on repack so PREPEND-style patches land inside the
+        // wrapper and Bun still sees a single function expression.
+        const text = result.toString('utf8');
+        const pm = text.match(BUN_CJS_PREFIX_RE);
+        const rstripLen = text.replace(/\s+$/, '').length;
+        if (pm && text.slice(rstripLen - 2, rstripLen) === '})') {
+          const prefix = pm[0];
+          // Everything from the last `})` onward (incl. any trailing newline)
+          // is the wrapper suffix.
+          const suffix = text.slice(rstripLen - 2);
+          const body = text.slice(prefix.length, rstripLen - 2);
+          bunCjsWrapper = {
+            prefix: Buffer.from(prefix, 'utf8'),
+            suffix: Buffer.from(suffix, 'utf8'),
+          };
+          debug(
+            `extractClaudeJsFromNativeInstallation: @bun-cjs module — unwrapped function body (${body.length} bytes), wrapper prefix=${prefix.length}B suffix=${suffix.length}B`
+          );
+          return { data: Buffer.from(body, 'utf8'), clearBytecode: false };
+        }
+
+        // Couldn't recognize the wrapper — fall back to npm source.
         debug(
-          'extractClaudeJsFromNativeInstallation: Extracted content is Bun bytecode — falling back to npm source'
+          'extractClaudeJsFromNativeInstallation: @bun-cjs prefix present but wrapper not recognized — falling back to npm source'
         );
 
         if (version) {
@@ -1578,6 +1625,20 @@ export function repackNativeInstallation(
   clearBytecode: boolean
 ): void {
   LIEF.logging.disable();
+
+  // @bun-cjs: re-wrap the patched body back into the CJS function wrapper that
+  // extract stripped, so Bun's loader still sees a single function expression.
+  if (bunCjsWrapper && modifiedClaudeJs) {
+    debug(
+      `repackNativeInstallation: re-wrapping @bun-cjs body (prefix=${bunCjsWrapper.prefix.length}B suffix=${bunCjsWrapper.suffix.length}B)`
+    );
+    modifiedClaudeJs = Buffer.concat([
+      bunCjsWrapper.prefix,
+      modifiedClaudeJs,
+      bunCjsWrapper.suffix,
+    ]);
+  }
+
   const binary = LIEF.parse(binPath);
 
   const bundle = locateBundle(binary, binPath);
