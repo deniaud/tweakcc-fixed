@@ -155,6 +155,27 @@ export function resolveNixBinaryWrapper(binaryPath: string): string | null {
 const BUN_TRAILER = Buffer.from('\n---- Bun! ----\n');
 const BUN_BYTECODE_PREFIX = '// @bun @bytecode';
 
+// CC 2.1.156+ (Bun v1.3.14) ships the claude module in Bun's `@bun-cjs`
+// format: `contents` holds the FULL CJS-wrapped source —
+// `// @bun @bytecode @bun-cjs\n(function(exports, require, module, __filename,
+// __dirname) {…body…})` — and Bun's standalone loader evaluates `contents`
+// expecting it to return a callable (the function expression). Patches that
+// edit the body are fine, but patches that PREPEND top-level code (e.g.
+// scrollEscapeSequenceFilter) would land OUTSIDE the function wrapper and
+// break the "evaluates to a function" invariant → boot fails with
+// "Expected CommonJS module to have a function wrapper".
+//
+// So for @bun-cjs we unwrap the source to its inner body before patching and
+// re-wrap it on repack. extract sets this; repackNativeInstallation consumes
+// it (both live in this module and run in the same process within one apply).
+let bunCjsWrapper: { prefix: Buffer; suffix: Buffer } | null = null;
+
+// Matches `// @bun @bytecode …<newline>(function(<args>) {` at the start of a
+// @bun-cjs module's contents. Captures the whole prefix up to and including
+// the function body's opening brace.
+const BUN_CJS_PREFIX_RE =
+  /^\/\/ @bun @bytecode[^\n]*\n\(function\([^)]*\)\s*\{/;
+
 // Size constants for binary structures
 const SIZEOF_OFFSETS = 32;
 const SIZEOF_STRING_POINTER = 8;
@@ -886,9 +907,36 @@ export function extractClaudeJsFromNativeInstallation(
 
     if (result) {
       const head = result.subarray(0, 30).toString('utf8');
+      // Reset any wrapper state from a previous call.
+      bunCjsWrapper = null;
+
       if (head.startsWith(BUN_BYTECODE_PREFIX)) {
+        // @bun-cjs: the contents are the CJS-wrapped source itself (see the
+        // note on `bunCjsWrapper`). Unwrap to the inner function body, patch
+        // that, and re-wrap on repack so PREPEND-style patches land inside the
+        // wrapper and Bun still sees a single function expression.
+        const text = result.toString('utf8');
+        const pm = text.match(BUN_CJS_PREFIX_RE);
+        const rstripLen = text.replace(/\s+$/, '').length;
+        if (pm && text.slice(rstripLen - 2, rstripLen) === '})') {
+          const prefix = pm[0];
+          // Everything from the last `})` onward (incl. any trailing newline)
+          // is the wrapper suffix.
+          const suffix = text.slice(rstripLen - 2);
+          const body = text.slice(prefix.length, rstripLen - 2);
+          bunCjsWrapper = {
+            prefix: Buffer.from(prefix, 'utf8'),
+            suffix: Buffer.from(suffix, 'utf8'),
+          };
+          debug(
+            `extractClaudeJsFromNativeInstallation: @bun-cjs module — unwrapped function body (${body.length} bytes), wrapper prefix=${prefix.length}B suffix=${suffix.length}B`
+          );
+          return { data: Buffer.from(body, 'utf8'), clearBytecode: false };
+        }
+
+        // Couldn't recognize the wrapper — fall back to npm source.
         debug(
-          'extractClaudeJsFromNativeInstallation: Extracted content is Bun bytecode — falling back to npm source'
+          'extractClaudeJsFromNativeInstallation: @bun-cjs prefix present but wrapper not recognized — falling back to npm source'
         );
 
         if (version) {
@@ -1463,6 +1511,35 @@ function repackELFSection(
       );
     }
 
+    // Guard against catastrophic file bloat. The new .bun section is placed
+    // inside the single RW PT_LOAD segment, so its file offset is tied to its
+    // virtual address: extend() pads the file to bridge the distance between the
+    // segment's current end and `newVaddr`. Decomposing the arithmetic,
+    //   extensionSize = (newVaddr - rwSegmentEnd) + alignedNewSize
+    // i.e. the wasteful NUL padding is exactly the virtual-address gap between
+    // the end of the RW segment and where nextVirtualAddress() placed the blob.
+    // For a compact Bun layout that gap is tens of MB (observed ~18MB on CC
+    // 2.1.146). But when Bun lays the .bun blob at a sparse high vaddr,
+    // nextVirtualAddress() returns a value hundreds of MB past the segment, so
+    // the padding explodes (observed: a 236MB binary ballooning to ~1.2GB, which
+    // then failed to boot with "Cannot access '<var>' before initialization").
+    // Bound the padding directly — independent of the JS blob size — and abort
+    // loudly rather than silently emitting a multi-GB, unbootable binary.
+    const vaddrGapPadding = extensionSize - alignedNewSize;
+    const MAX_VADDR_GAP = BigInt(128 * 1024 * 1024); // 128 MiB
+    if (vaddrGapPadding > MAX_VADDR_GAP) {
+      throw new Error(
+        `repackELFSection: refusing to pad the binary with ${vaddrGapPadding} ` +
+          `bytes of NUL to embed ${newContentSize} bytes of .bun data. The new ` +
+          `section vaddr 0x${newVaddr.toString(16)} sits far past the RW segment ` +
+          `(vaddr 0x${rwSegment.virtualAddress.toString(16)}); extending the ` +
+          `single PT_LOAD segment across that virtual-address gap would bloat the ` +
+          `file by the gap. This Claude Code build's ELF layout is not supported ` +
+          `by the .bun repack path — refusing to produce a bloated, unbootable ` +
+          `binary.`
+      );
+    }
+
     debug(
       `repackELFSection: moving .bun to offset=0x${newFileOffset.toString(16)}, vaddr=0x${newVaddr.toString(16)}, size=0x${newContentSize.toString(16)}`
     );
@@ -1549,6 +1626,20 @@ export function repackNativeInstallation(
   clearBytecode: boolean
 ): void {
   LIEF.logging.disable();
+
+  // @bun-cjs: re-wrap the patched body back into the CJS function wrapper that
+  // extract stripped, so Bun's loader still sees a single function expression.
+  if (bunCjsWrapper && modifiedClaudeJs) {
+    debug(
+      `repackNativeInstallation: re-wrapping @bun-cjs body (prefix=${bunCjsWrapper.prefix.length}B suffix=${bunCjsWrapper.suffix.length}B)`
+    );
+    modifiedClaudeJs = Buffer.concat([
+      bunCjsWrapper.prefix,
+      modifiedClaudeJs,
+      bunCjsWrapper.suffix,
+    ]);
+  }
+
   const binary = LIEF.parse(binPath);
 
   const bundle = locateBundle(binary, binPath);

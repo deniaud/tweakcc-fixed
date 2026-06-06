@@ -163,6 +163,46 @@ export const applySystemPrompts = async (
       // Generate the interpolated content using the actual variables from the match
       const interpolatedContent = getInterpolatedContent(match);
 
+      // Fail-closed guard against unresolved identifier placeholders.
+      //
+      // System prompts carry named identifier placeholders (e.g.
+      // EXIT_PLAN_MODE_TOOL_NAME) that must be substituted with the real
+      // minified variable captured from THIS bundle. When the prompt's search
+      // regex (synced against the npm cli.js) matches the native binary's
+      // differently-minified bundle but under-captures, the placeholder is
+      // left as a bare identifier — which, once written into the bundle,
+      // crashes at runtime with "X is not defined". Detect any expected
+      // identifier name that survived interpolation as a `${...}` template
+      // interpolation and SKIP this prompt rather than emit a broken
+      // reference. The names are SCREAMING_SNAKE_CASE with ≥3 segments; real
+      // minified vars never look like that. We deliberately match ONLY inside
+      // `${...}` — a bare SCREAMING_SNAKE token in ordinary prose/string text
+      // (e.g. documenting ANTHROPIC_API_KEY) is harmless and must NOT trigger
+      // a skip. (CC 2.1.156+ native @bun-cjs; pairs with the @bun-cjs
+      // unwrap/rewrap fix in nativeInstallation.)
+      const leakedSet = new Set<string>();
+      for (const m of interpolatedContent.matchAll(
+        /\$\{\s*([A-Z][A-Z0-9]*(?:_[A-Z0-9]+){2,})\s*\}/g
+      )) {
+        leakedSet.add(m[1]);
+      }
+      const leakedIdentifiers = [...leakedSet];
+      if (leakedIdentifiers.length > 0) {
+        console.log(
+          chalk.yellow(
+            `Skipping "${prompt.name}": unresolved identifier(s) ${leakedIdentifiers.join(', ')} — search regex under-captured on this build`
+          )
+        );
+        results.push({
+          id: promptId,
+          name: prompt.name,
+          group: PatchGroup.SYSTEM_PROMPTS,
+          applied: false,
+          details: `unresolved identifiers: ${leakedIdentifiers.join(', ')}`,
+        });
+        continue;
+      }
+
       // Check the delimiter character before the match to determine string type
       const matchIndex = match.index;
       const delimiter = matchIndex > 0 ? content[matchIndex - 1] : '';
