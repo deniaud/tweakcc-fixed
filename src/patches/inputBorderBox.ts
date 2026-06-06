@@ -50,9 +50,9 @@ export const writeInputBoxBorder = (
     patched = true;
   }
 
-  // --- Path 2: Main input Box (else-branch with borderText:) ---
-  // Unique identifier: borderColor:VAR(),borderStyle:"round",...,borderText:VAR(...)
-  // The borderColor uses a function call like YB() and borderText uses a function call.
+  // --- Path 2: Main input Box (else-branch with inline width+borderText:) ---
+  // Older shape (≤2.1.16x pre-split): borderColor uses a bare function call
+  // (e.g. YB()) and width:"100%"/borderText: live inside the same object literal.
   const mainInputPattern =
     /(borderColor:[$\w]+\(\),)borderStyle:"round"(,borderLeft:!1,borderRight:!1,borderBottom:!0,width:"100%",borderText:)/;
   const mainInputMatch = content.match(mainInputPattern);
@@ -62,6 +62,28 @@ export const writeInputBoxBorder = (
       `${mainInputMatch[1]}borderStyle:undefined${mainInputMatch[2]}`
     );
     patched = true;
+  }
+
+  // --- Path 2b: CC 2.1.167 unified border-config object (lO) ---
+  // In 2.1.167 the PromptInput border config was split out into one object:
+  //   lO = WD ? {} : { borderColor:(()=>{…})(), borderStyle:"round",
+  //                    borderLeft:!1, borderRight:!1, borderBottom:!0 }
+  // and width:"100%"/borderText: are now spread separately at the createElement
+  // site (…lO,width:"100%",borderText:…). Crucially the SAME lO object is reused
+  // by the external-editor path ("Save and close editor"), so a single
+  // borderStyle substitution removes the border for both. The borderColor is an
+  // IIFE here, not a bare call, so the old Path 2/3 anchors no longer match.
+  if (!patched) {
+    const unifiedLoPattern =
+      /(borderColor:\(\(\)=>\{[\s\S]{0,400}?\}\)\(\),)borderStyle:"round"(,borderLeft:!1,borderRight:!1,borderBottom:!0\})/;
+    const unifiedMatch = content.match(unifiedLoPattern);
+    if (unifiedMatch) {
+      content = content.replace(
+        unifiedLoPattern,
+        `${unifiedMatch[1]}borderStyle:undefined${unifiedMatch[2]}`
+      );
+      patched = true;
+    }
   }
 
   // --- Path 3: External editor Box ---
