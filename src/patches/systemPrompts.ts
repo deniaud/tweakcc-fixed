@@ -179,6 +179,68 @@ export const applySystemPrompts = async (
       // Generate the interpolated content using the actual variables from the match
       const interpolatedContent = getInterpolatedContent(match);
 
+      // Fail-closed guard against tweakcc's own unresolved-identifier sentinel.
+      //
+      // When a prompt's identifierMap has no entry for a captured label index,
+      // reconstructContentFromPieces / applyIdentifierMapping fall back to the
+      // literal human-name `UNKNOWN_<idx>` (see systemPromptSync.ts). If that
+      // survives interpolation and gets baked into the bundle inside a `${...}`
+      // template slot, CC crashes at runtime with "UNKNOWN_1 is not defined"
+      // (confirmed live on CC 2.1.204 for skill-code-review-* and
+      // system-reminder-askuserquestion-* overrides out of sync with this build).
+      //
+      // Detect any surviving multi-segment `${SCREAMING_SNAKE}` placeholder that
+      // the override INTRODUCED (i.e. is NOT already a `${...}` slot in the
+      // pristine bundle) and SKIP the prompt rather than ship a boot-crashing
+      // reference. Both the `UNKNOWN_<idx>` sentinel and named human-name
+      // placeholders such as `${CRON_DURABLE_FLAG}` / `${GITHUB_TOKEN}` were
+      // observed leaking live on CC 2.1.204 (out-of-sync overrides) and each
+      // crashes at runtime ("X is not defined"); the identifierMap-union guard
+      // below only covers KNOWN human-names, so they slipped past it. Requiring
+      // ≥2 segments avoids short minified runtime vars (never SCREAMING_SNAKE).
+      // The pristine-bundle presence check keeps a placeholder that the override
+      // legitimately references as a genuine runtime binding (present verbatim in
+      // the original) — over-skipping only truly-introduced, unbound refs.
+      // Negative lookbehind excludes an escaped `\${...}` (literal text).
+      const bundleHasSlot = (id: string) =>
+        new RegExp('\\$\\{\\s*' + id + '\\s*\\}').test(content);
+      const leakedSet = new Set<string>();
+      for (const m of interpolatedContent.matchAll(
+        /(?<!\\)\$\{\s*([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)\s*\}/g
+      )) {
+        const id = m[1];
+        // Always skip the `UNKNOWN_<idx>` mapping-failure sentinel. Otherwise this
+        // guard handles only NON-union names (known human-names are left to the
+        // identifierMap-union guard below, which also handles same-id sibling
+        // shapes): skip a non-union placeholder only when the override INTRODUCED
+        // it (no matching `${...}` slot in the pristine bundle). A name present
+        // verbatim in the original is a genuine runtime binding and must still
+        // apply; an introduced non-union name (e.g. an out-of-sync `CRON_DURABLE_FLAG`
+        // or an unescaped `GITHUB_TOKEN` env-var doc) bakes a boot-crashing ref.
+        if (
+          /^UNKNOWN_[0-9]+$/.test(id) ||
+          (!identifierMapUnion.has(id) && !bundleHasSlot(id))
+        ) {
+          leakedSet.add(id);
+        }
+      }
+      const leakedIdentifiers = [...leakedSet];
+      if (leakedIdentifiers.length > 0) {
+        console.log(
+          chalk.yellow(
+            `Skipping "${prompt.name}": unresolved identifier(s) ${leakedIdentifiers.join(', ')} — override out of sync with this CC build`
+          )
+        );
+        results.push({
+          id: promptId,
+          name: prompt.name,
+          group: PatchGroup.SYSTEM_PROMPTS,
+          applied: false,
+          details: `unresolved identifiers: ${leakedIdentifiers.join(', ')}`,
+        });
+        continue;
+      }
+
       // Check the delimiter character before the match to determine string type
       const matchIndex = match.index;
       const delimiter = working.charAt(matchIndex - 1);

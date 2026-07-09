@@ -288,6 +288,103 @@ describe('systemPrompts.ts', () => {
       );
     });
 
+    it('should fail-closed skip a prompt whose interpolation leaks the ${UNKNOWN_<idx>} sentinel (catches 2-segment UNKNOWN_1)', async () => {
+      // tweakcc emits `UNKNOWN_<idx>` when an identifier at a captured label
+      // index has no identifierMap entry. Baked into a `${...}` template slot it
+      // crashes CC at launch ("UNKNOWN_1 is not defined"). The sentinel is a
+      // 2-segment name the old ALL_CAPS_WITH_UNDERSCORE{2,} grammar missed, and
+      // it is never a union member so the union guard below cannot catch it.
+      const mockPromptData = buildMockPromptData({
+        prompt: { content: 'before ${UNKNOWN_1} after' },
+        regex: 'before \\$\\{UNKNOWN_1\\} after',
+        getInterpolatedContent: () => 'before ${UNKNOWN_1} after',
+        pieces: ['before ${UNKNOWN_1} after'],
+      });
+
+      setupMocks(mockPromptData);
+
+      const cliContent = 'desc:`before ${UNKNOWN_1} after`';
+
+      const result = await applySystemPrompts(cliContent, '1.0.0', false);
+
+      expect(result.newContent).toBe(cliContent);
+      expect(result.results[0].applied).toBe(false);
+      expect(result.results[0].details).toContain('unresolved identifiers');
+      expect(result.results[0].details).toContain('UNKNOWN_1');
+    });
+
+    it('should skip the sentinel regardless of index and string delimiter', async () => {
+      // A high index and a plain double-quoted context: still fail-closed. A
+      // shipped UNKNOWN_<idx> sentinel is always a tweakcc mapping failure, so
+      // skip it in any context rather than corrupt the bundle.
+      const mockPromptData = buildMockPromptData({
+        prompt: { content: 'x ${UNKNOWN_999} y' },
+        regex: 'x \\$\\{UNKNOWN_999\\} y',
+        getInterpolatedContent: () => 'x ${UNKNOWN_999} y',
+        pieces: ['x ${UNKNOWN_999} y'],
+      });
+
+      setupMocks(mockPromptData);
+
+      const cliContent = 'desc:"x ${UNKNOWN_999} y"';
+
+      const result = await applySystemPrompts(cliContent, '1.0.0', false);
+
+      expect(result.newContent).toBe(cliContent);
+      expect(result.results[0].applied).toBe(false);
+      expect(result.results[0].details).toContain('UNKNOWN_999');
+    });
+
+    it('should NOT skip a genuine runtime binding that looks like SCREAMING_SNAKE (${MAX_RETRY_COUNT})', async () => {
+      // Regression fence: the sentinel guard must be scoped to UNKNOWN_<idx>
+      // ONLY. A resolved multi-segment binding is not "unresolved" and must
+      // still apply — a broad ${SCREAMING_SNAKE} guard would wrongly skip it.
+      const mockPromptData = buildMockPromptData({
+        prompt: { content: 'wait ${MAX_RETRY_COUNT} ms then stop' },
+        regex: 'wait \\$\\{MAX_RETRY_COUNT\\} ms then go',
+        getInterpolatedContent: () => 'wait ${MAX_RETRY_COUNT} ms then stop',
+        pieces: ['wait ${MAX_RETRY_COUNT} ms then go'],
+      });
+
+      setupMocks(mockPromptData);
+
+      const cliContent = 'desc:`wait ${MAX_RETRY_COUNT} ms then go`';
+
+      const result = await applySystemPrompts(cliContent, '1.0.0', false);
+
+      expect(result.results[0].applied).toBe(true);
+      expect(result.results[0].details ?? '').not.toContain(
+        'unresolved identifiers'
+      );
+      expect(result.newContent).toBe(
+        'desc:`wait ${MAX_RETRY_COUNT} ms then stop`'
+      );
+    });
+
+    it('should NOT skip an escaped \\${UNKNOWN_1} sentinel (literal text, never evaluated)', async () => {
+      // A backslash-escaped `\${UNKNOWN_1}` is intentional literal text, not a
+      // template interpolation, so it never ReferenceErrors. The negative
+      // lookbehind keeps the guard from flagging it.
+      const mockPromptData = buildMockPromptData({
+        prompt: { content: 'doc \\${UNKNOWN_1} now' },
+        regex: 'doc \\\\\\$\\{UNKNOWN_1\\} here',
+        getInterpolatedContent: () => 'doc \\${UNKNOWN_1} now',
+        pieces: ['doc \\${UNKNOWN_1} here'],
+      });
+
+      setupMocks(mockPromptData);
+
+      const cliContent = 'desc:`doc \\${UNKNOWN_1} here`';
+
+      const result = await applySystemPrompts(cliContent, '1.0.0', false);
+
+      expect(result.results[0].applied).toBe(true);
+      expect(result.results[0].details ?? '').not.toContain(
+        'unresolved identifiers'
+      );
+      expect(result.newContent).toBe('desc:`doc \\${UNKNOWN_1} now`');
+    });
+
     it('should skip prompt with applied:false when escapeDepthZeroBackticks returns incomplete', async () => {
       const mockPromptData = buildMockPromptData({
         prompt: { content: 'text ${unclosed backtick' },
