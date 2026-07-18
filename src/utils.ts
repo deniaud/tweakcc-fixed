@@ -354,6 +354,41 @@ export async function hashFileInChunks(
   });
 }
 
+// Streams a (possibly multi-hundred-MB) file and returns true if any of the
+// given ASCII markers occurs in its bytes. Chunked with an overlap tail so a
+// marker straddling a chunk boundary is still found. Used to detect whether a
+// native CC binary already carries tweakcc/cc-quote patches before trusting it
+// as a "pristine" backup source (poisoning that backup silently compounds
+// repacks — the 705 MB incident, 2026-07-18).
+export async function fileContainsAnyMarker(
+  filePath: string,
+  markers: string[],
+  chunkSize: number = 1024 * 1024
+): Promise<boolean> {
+  if (markers.length === 0) return false;
+  const overlap = Math.max(...markers.map(m => m.length)) - 1;
+  return new Promise((resolve, reject) => {
+    const stream = fsSync.createReadStream(filePath, {
+      highWaterMark: chunkSize,
+      encoding: 'latin1',
+    });
+    let tail = '';
+    let found = false;
+    stream.on('data', (chunk: string | Buffer) => {
+      const hay = tail + chunk.toString();
+      if (markers.some(m => hay.includes(m))) {
+        found = true;
+        stream.destroy();
+        return;
+      }
+      tail = overlap > 0 ? hay.slice(-overlap) : '';
+    });
+    stream.on('close', () => resolve(found));
+    stream.on('end', () => resolve(found));
+    stream.on('error', reject);
+  });
+}
+
 // Helper function to build chalk formatting chain
 export const buildChalkChain = (
   chalkVar: string,

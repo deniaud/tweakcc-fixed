@@ -7,8 +7,30 @@ import {
   updateConfigFile,
 } from './config';
 import { clearAllAppliedHashes } from './systemPromptHashIndex';
-import { debug, replaceFileBreakingHardLinks, doesFileExist } from './utils';
+import {
+  debug,
+  replaceFileBreakingHardLinks,
+  doesFileExist,
+  fileContainsAnyMarker,
+} from './utils';
 import { ClaudeCodeInstallationInfo } from './types';
+
+// ASCII markers that only ever appear in a tweakcc- or cc-quote-PATCHED native
+// CC bundle, never in a pristine one (`__tweakcc*` = tweakcc's injected globals,
+// e.g. the complexity router; `__cc_citations__` = cc-quote). Presence of any
+// one means the binary is already patched and must NOT be enshrined as the
+// "pristine" backup. Note: not every tweakcc config injects `__tweakcc*`, so
+// this is a best-effort detector for the common stack — the build-update
+// pipeline's post-apply size assertion is the catch-all backstop.
+const PATCH_MARKERS = ['__tweakcc', '__cc_citations__'];
+
+/**
+ * Returns true if the file at `path` carries tweakcc/cc-quote patch markers.
+ * Callers use this to avoid overwriting a good pristine backup with a patched
+ * binary (which would poison `--restore` and silently compound native repacks).
+ */
+export const isNativeBinaryPatched = async (path: string): Promise<boolean> =>
+  fileContainsAnyMarker(path, PATCH_MARKERS);
 
 // Copy a file into place atomically: copy to a sibling temp, then rename onto
 // the destination. rename(2) is atomic within a filesystem, so a crash mid-copy
@@ -53,6 +75,21 @@ export const backupNativeBinary = async (
 ) => {
   if (!ccInstInfo.nativeInstallationPath) {
     return;
+  }
+
+  // Fail-closed invariant: the pristine backup must never contain a patched
+  // binary. If the source already carries our patch markers, refuse — backing
+  // it up as "pristine" would make `--restore` return a patched binary, and the
+  // next `--apply` would stack patches onto it (an extra repack → runaway
+  // bloat, the 705 MB incident). Callers should pre-check with
+  // isNativeBinaryPatched to preserve any existing good backup rather than
+  // reach this throw.
+  if (await isNativeBinaryPatched(ccInstInfo.nativeInstallationPath)) {
+    throw new Error(
+      `Refusing to back up ${ccInstInfo.nativeInstallationPath} as pristine: ` +
+        'it carries tweakcc/cc-quote patch markers. Reinstall stock Claude Code ' +
+        '(e.g. `claude update` or a fresh version dir), then retry.'
+    );
   }
 
   await ensureConfigDir();

@@ -7,6 +7,7 @@ import {
   MAX_FETCH_BYTES,
   escapeNonAscii,
   editTextInEditor,
+  fileContainsAnyMarker,
 } from './utils';
 
 describe('escapeNonAscii', () => {
@@ -119,5 +120,47 @@ describe('editTextInEditor', () => {
       expect(editTextInEditor('seed')).toBeNull();
     });
     fs.unlinkSync(ed);
+  });
+});
+
+describe('fileContainsAnyMarker', () => {
+  const mkfile = (bytes: Buffer | string): string => {
+    const p = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'tweakcc-marker-')),
+      'blob.bin'
+    );
+    fs.writeFileSync(p, bytes);
+    return p;
+  };
+
+  it('finds a marker present in a single chunk', async () => {
+    const p = mkfile('....__cc_citations__....');
+    expect(
+      await fileContainsAnyMarker(p, ['__tweakcc', '__cc_citations__'])
+    ).toBe(true);
+    fs.rmSync(path.dirname(p), { recursive: true, force: true });
+  });
+
+  it('returns false when no marker is present (pristine-like)', async () => {
+    const p = mkfile('a pristine bundle with none of the sentinels');
+    expect(
+      await fileContainsAnyMarker(p, ['__tweakcc', '__cc_citations__'])
+    ).toBe(false);
+    fs.rmSync(path.dirname(p), { recursive: true, force: true });
+  });
+
+  it('finds a marker straddling a chunk boundary', async () => {
+    // 8 filler bytes + marker, read with a tiny 8-byte chunk so the marker is
+    // split across the overlap tail — the exact case the overlap guards.
+    const marker = '__cc_citations__';
+    const p = mkfile('xxxxxxxx' + marker + 'yyyy');
+    expect(await fileContainsAnyMarker(p, [marker], 8)).toBe(true);
+    fs.rmSync(path.dirname(p), { recursive: true, force: true });
+  });
+
+  it('returns false for an empty marker list', async () => {
+    const p = mkfile('anything');
+    expect(await fileContainsAnyMarker(p, [])).toBe(false);
+    fs.rmSync(path.dirname(p), { recursive: true, force: true });
   });
 });

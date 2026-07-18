@@ -19,7 +19,11 @@ import {
   StartupCheckInfo,
   TweakccConfig,
 } from './types';
-import { backupClijs, backupNativeBinary } from './installationBackup';
+import {
+  backupClijs,
+  backupNativeBinary,
+  isNativeBinaryPatched,
+} from './installationBackup';
 
 export interface StartupCheckResult {
   startupCheckInfo: StartupCheckInfo | null;
@@ -98,11 +102,21 @@ export async function completeStartupCheck(
     ccInstInfo.nativeInstallationPath &&
     !(await doesFileExist(NATIVE_BINARY_BACKUP_FILE))
   ) {
-    debug(
-      `startupCheck: ${NATIVE_BINARY_BACKUP_FILE} not found; backing up native binary`
-    );
-    await backupNativeBinary(ccInstInfo);
-    hasBackedUpNativeBinary = true;
+    if (await isNativeBinaryPatched(ccInstInfo.nativeInstallationPath!)) {
+      // No pristine backup exists and the installed binary is already patched —
+      // establishing it as "pristine" would poison every future --restore. Skip
+      // and warn; the operator must reinstall stock CC to get a clean backup.
+      debug(
+        `startupCheck: no native binary backup and installed binary is already ` +
+          `patched — skipping backup to avoid poisoning it. Reinstall stock CC.`
+      );
+    } else {
+      debug(
+        `startupCheck: ${NATIVE_BINARY_BACKUP_FILE} not found; backing up native binary`
+      );
+      await backupNativeBinary(ccInstInfo);
+      hasBackedUpNativeBinary = true;
+    }
   }
 
   // If the installed CC version is different from what we have backed up, clear out our backup
@@ -119,15 +133,26 @@ export async function completeStartupCheck(
       await backupClijs(ccInstInfo);
     }
 
-    // Also backup native binary if version changed
+    // Also backup native binary if version changed — but only if the installed
+    // binary is clean. If it already carries patch markers (e.g. a patched
+    // binary was version-bumped in place), re-backing it up would enshrine a
+    // patched "pristine". Check BEFORE unlinking so a good existing backup is
+    // preserved rather than destroyed for a poisoned replacement.
     if (ccInstInfo.nativeInstallationPath && !hasBackedUpNativeBinary) {
-      debug(
-        `startupCheck: real version (${realVersion}) != backed up version (${backedUpVersion}); backing up native binary`
-      );
-      if (await doesFileExist(NATIVE_BINARY_BACKUP_FILE)) {
-        await fs.unlink(NATIVE_BINARY_BACKUP_FILE);
+      if (await isNativeBinaryPatched(ccInstInfo.nativeInstallationPath)) {
+        debug(
+          `startupCheck: installed native binary carries patch markers; keeping ` +
+            `existing backup (refusing to re-backup a patched binary as pristine)`
+        );
+      } else {
+        debug(
+          `startupCheck: real version (${realVersion}) != backed up version (${backedUpVersion}); backing up native binary`
+        );
+        if (await doesFileExist(NATIVE_BINARY_BACKUP_FILE)) {
+          await fs.unlink(NATIVE_BINARY_BACKUP_FILE);
+        }
+        await backupNativeBinary(ccInstInfo);
       }
-      await backupNativeBinary(ccInstInfo);
     }
 
     return {
