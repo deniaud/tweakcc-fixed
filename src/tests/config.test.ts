@@ -1733,7 +1733,10 @@ describe('config.ts', () => {
       ).toBe(false);
       expect(result).not.toBe(null);
       expect(result!.startupCheckInfo?.wasUpdated).toBe(true);
-    });
+      // startupCheck's re-backup path does non-trivial work; under CI / bg-agent
+      // load it can exceed vitest's 5s default (flaked in the pre-commit hook).
+      // Give headroom — the assertions above are what matter, not wall-time.
+    }, 15000);
 
     // N-1: a missing or corrupt config.json reads as ccVersion '', which looks
     // like "the user updated Claude Code" and triggers a re-backup — of the
