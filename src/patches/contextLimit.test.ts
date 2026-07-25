@@ -62,4 +62,27 @@ describe('writeContextLimit', () => {
     )!;
     expect(() => new Function(out + 'return 1;')).not.toThrow();
   });
+
+  // A readable (non-minified) declaration whose first constant is literally
+  // `CONTEXT_ENTRY_LIMIT` — the shape the CC 2.1.220 crash report attributed the
+  // `CONTEXT_ENTRY_LIMIT is not defined` failure to. The writer must do a
+  // VALUE-only replacement: keep every captured identifier name verbatim (no
+  // rename) so downstream references stay bound and no dangling ref is left.
+  it('preserves a readable CONTEXT_ENTRY_LIMIT identifier (value-only, no rename)', () => {
+    const input =
+      'var CONTEXT_ENTRY_LIMIT=200000,MODEL_WINDOW=200000,MAX_OUT=32000,MAX_OUT_UPPER=128000,MEGA=1e6;' +
+      'function windowFor(n){return Math.min(Math.floor(CONTEXT_ENTRY_LIMIT*n),MODEL_WINDOW)}';
+    const out = writeContextLimit(input)!;
+    expect(out).not.toBeNull();
+    // The declaration keeps the readable names; only the 200000 values change.
+    expect(out).toContain(
+      `var CONTEXT_ENTRY_LIMIT=${OVERRIDE},MODEL_WINDOW=${OVERRIDE},MAX_OUT=32000,MAX_OUT_UPPER=128000,MEGA=1e6;`
+    );
+    // Every reference to the preserved identifiers is still declared — no
+    // `CONTEXT_ENTRY_LIMIT is not defined`.
+    expect(() => new Function(out + 'return 1;')).not.toThrow();
+    // The identifier the crash blamed is present as a real binding (declared),
+    // never dropped or renamed.
+    expect(out).toMatch(/var CONTEXT_ENTRY_LIMIT=/);
+  });
 });
