@@ -63,6 +63,121 @@ export const leakedPromptPlaceholders = (
   );
 };
 
+/**
+ * Bare, value-position identifiers that appear in CODE position inside `${...}`
+ * interpolations of a backtick template-literal BODY (the text between the
+ * backticks). Skips string/template literals, so literal text like `"FOO_BAR"`
+ * is ignored, and skips property-access names (the token right after `.`).
+ *
+ * A single-pass lexer over the template body: it descends into every `${...}`
+ * expression, tracks nested `{...}`, and steps over `'…'`/`"…"` and nested
+ * `` `…` `` templates so only genuine code identifiers are collected. Regex
+ * literals are not specially handled (a divide vs. regex slash is ambiguous
+ * without a full parser), which is acceptable because prompt interpolations do
+ * not embed regex literals carrying SCREAMING_SNAKE tokens.
+ */
+export const interpolationCodeIdentifiers = (body: string): Set<string> => {
+  const ids = new Set<string>();
+  type Frame =
+    | { kind: 'text' }
+    | { kind: 'code'; depth: number }
+    | { kind: 'sq' }
+    | { kind: 'dq' };
+  const stack: Frame[] = [{ kind: 'text' }];
+  const n = body.length;
+  let i = 0;
+  const isIdentStart = (c: string) => /[A-Za-z_$]/.test(c);
+  const isIdentPart = (c: string) => /[\w$]/.test(c);
+  while (i < n) {
+    const frame = stack[stack.length - 1];
+    const c = body[i];
+    if (frame.kind === 'text') {
+      if (c === '\\') {
+        i += 2;
+      } else if (c === '$' && body[i + 1] === '{') {
+        stack.push({ kind: 'code', depth: 0 });
+        i += 2;
+      } else if (c === '`' && stack.length > 1) {
+        // Close a nested template literal (return to its enclosing code frame).
+        // A backtick at the base frame is not a delimiter — the body is already
+        // the INSIDE of a template literal (or raw markdown whose code-span
+        // backticks are literal text), so it must never pop the base frame.
+        stack.pop();
+        i += 1;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+    if (frame.kind === 'sq' || frame.kind === 'dq') {
+      const quote = frame.kind === 'sq' ? "'" : '"';
+      if (c === '\\') i += 2;
+      else if (c === quote) {
+        stack.pop();
+        i += 1;
+      } else i += 1;
+      continue;
+    }
+    // frame.kind === 'code'
+    if (c === '\\') {
+      i += 2;
+    } else if (c === "'") {
+      stack.push({ kind: 'sq' });
+      i += 1;
+    } else if (c === '"') {
+      stack.push({ kind: 'dq' });
+      i += 1;
+    } else if (c === '`') {
+      stack.push({ kind: 'text' });
+      i += 1;
+    } else if (c === '{') {
+      frame.depth += 1;
+      i += 1;
+    } else if (c === '}') {
+      if (frame.depth === 0) stack.pop();
+      else frame.depth -= 1;
+      i += 1;
+    } else if (isIdentStart(c)) {
+      let j = i + 1;
+      while (j < n && isIdentPart(body[j])) j += 1;
+      // Value position only: skip the property name in `obj.PROP` (and `?.PROP`).
+      if (body[i - 1] !== '.') ids.add(body.slice(i, j));
+      i = j;
+    } else {
+      i += 1;
+    }
+  }
+  return ids;
+};
+
+/**
+ * Placeholder human-names an override BURIED as a bare identifier inside an
+ * interpolation expression (e.g. `${x.entries(CONTEXT_ENTRY_LIMIT)}`) that
+ * survived into the spliced output unresolved. The `${NAME` slot-open guard in
+ * {@link leakedPromptPlaceholders} cannot see these because the dangling name is
+ * not the first token after `${`. Flags a name only when it (a) is a tweakcc
+ * human-name, (b) belongs to the identifierMap vocabulary union (so it is a
+ * known placeholder, not a genuine minified binding), (c) still appears in the
+ * OUTPUT in code position, and (d) appears in the MARKDOWN source in code
+ * position — i.e. the override wrote it as a live reference the current prompt
+ * shape does not bind. Caller must gate on a backtick delimiter: inside a
+ * plain '…'/"…" string the same `${...}` is inert text, not a live reference.
+ */
+export const leakedBuriedPlaceholders = (
+  interpolatedContent: string,
+  markdownContent: string,
+  identifierMapUnion: Set<string>
+): string[] => {
+  const outputIds = interpolationCodeIdentifiers(interpolatedContent);
+  const markdownIds = interpolationCodeIdentifiers(markdownContent);
+  return [...outputIds].filter(
+    name =>
+      isTweakccHumanName(name) &&
+      identifierMapUnion.has(name) &&
+      markdownIds.has(name)
+  );
+};
+
 export type MatchLike = RegExpMatchArray | RegExpExecArray;
 
 /**

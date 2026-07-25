@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   changedSpan,
   delimiterBefore,
+  interpolationCodeIdentifiers,
   introducedRawNonAscii,
+  leakedBuriedPlaceholders,
+  leakedPromptPlaceholders,
   lintBacktickEscapes,
   literalProbeRuns,
   literalProbeWindows,
@@ -308,5 +311,76 @@ describe('delimiterBefore', () => {
   it('reads the character immediately before the match', () => {
     expect(delimiterBefore('x=`body`', 3)).toBe('`');
     expect(delimiterBefore('body', 0)).toBe('');
+  });
+});
+
+describe('interpolationCodeIdentifiers', () => {
+  it('collects value-position identifiers inside ${...} interpolations', () => {
+    // The exact shape of the CC 2.1.220 question-context reminder override.
+    const body =
+      '<system-reminder>\nAs you answer:\n' +
+      '${QUESTION_CONTEXT.entries(CONTEXT_ENTRY_LIMIT).map(([CE_TITLE,CE_BODY])=>`# ${CE_TITLE}\n${CE_BODY}`).join(`\n`)}\n';
+    const ids = interpolationCodeIdentifiers(body);
+    expect(ids.has('QUESTION_CONTEXT')).toBe(true);
+    expect(ids.has('CONTEXT_ENTRY_LIMIT')).toBe(true); // buried as a call arg
+    expect(ids.has('CE_TITLE')).toBe(true);
+    expect(ids.has('CE_BODY')).toBe(true);
+    // Property-access names are NOT free variables.
+    expect(ids.has('entries')).toBe(false);
+    expect(ids.has('map')).toBe(false);
+    expect(ids.has('join')).toBe(false);
+  });
+
+  it('ignores identifiers that are literal string content, not code', () => {
+    const ids = interpolationCodeIdentifiers('${fn("NOT_A_VAR", OTHER_VAR)}');
+    expect(ids.has('OTHER_VAR')).toBe(true);
+    expect(ids.has('NOT_A_VAR')).toBe(false); // inside a string literal
+  });
+
+  it('ignores SCREAMING_SNAKE tokens outside interpolations (literal text)', () => {
+    const ids = interpolationCodeIdentifiers('plain text CONTEXT_ENTRY_LIMIT here');
+    expect(ids.has('CONTEXT_ENTRY_LIMIT')).toBe(false);
+  });
+
+  it('descends into nested template literals', () => {
+    const ids = interpolationCodeIdentifiers('${a.map(x=>`v=${INNER_VAR}`)}');
+    expect(ids.has('INNER_VAR')).toBe(true);
+  });
+});
+
+describe('leakedBuriedPlaceholders', () => {
+  const union = new Set(['CONTEXT_ENTRY_LIMIT', 'QUESTION_CONTEXT']);
+  // After substitution QUESTION_CONTEXT/title/body resolved to minified names,
+  // but CONTEXT_ENTRY_LIMIT (absent from the override's variables list) survived
+  // verbatim as a bare call argument.
+  const interpolated =
+    '${t.entries(CONTEXT_ENTRY_LIMIT).map(([q,K])=>`# ${q}\n${K}`).join(`\n`)}';
+  const markdown =
+    '${QUESTION_CONTEXT.entries(CONTEXT_ENTRY_LIMIT).map(([CE_TITLE,CE_BODY])=>`# ${CE_TITLE}\n${CE_BODY}`).join(`\n`)}';
+
+  it('flags a dangling human-name buried in an interpolation expression', () => {
+    expect(leakedBuriedPlaceholders(interpolated, markdown, union)).toEqual([
+      'CONTEXT_ENTRY_LIMIT',
+    ]);
+  });
+
+  it('is the ONLY guard that catches it — the slot-open guard misses it', () => {
+    // Regression proof: leakedPromptPlaceholders looks only at `${NAME`, so it
+    // cannot see a name buried as a call argument. This is exactly why the
+    // reference leaked into patched CC 2.1.220 and crashed the worker.
+    expect(
+      leakedPromptPlaceholders(interpolated, markdown, union)
+    ).not.toContain('CONTEXT_ENTRY_LIMIT');
+  });
+
+  it('does not flag a name that was properly substituted (did not survive)', () => {
+    const resolved = '${t.entries(Q9).map(([q,K])=>`# ${q}`)}';
+    expect(leakedBuriedPlaceholders(resolved, markdown, union)).toEqual([]);
+  });
+
+  it('does not flag a name absent from the identifierMap union', () => {
+    expect(
+      leakedBuriedPlaceholders(interpolated, markdown, new Set(['SOMETHING_ELSE']))
+    ).toEqual([]);
   });
 });

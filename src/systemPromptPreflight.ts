@@ -35,6 +35,7 @@ import {
   extractBuildTime,
   introducedRawNonAscii,
   leakedPromptPlaceholders,
+  leakedBuriedPlaceholders,
   lintBacktickEscapes,
   literalProbeWindows,
   OffsetMapper,
@@ -532,11 +533,22 @@ export const runSystemPromptPreflight = async ({
 
       const interpolatedContent = entry.getInterpolatedContent(match);
       const shouldSkip = (content: string, siteDelimiter: string): boolean => {
-        const leaked = leakedPromptPlaceholders(
-          content,
-          entry.prompt.content,
-          identifierMapUnion
-        );
+        const leaked = [
+          ...new Set([
+            ...leakedPromptPlaceholders(
+              content,
+              entry.prompt.content,
+              identifierMapUnion
+            ),
+            ...(siteDelimiter === '`'
+              ? leakedBuriedPlaceholders(
+                  content,
+                  entry.prompt.content,
+                  identifierMapUnion
+                )
+              : []),
+          ]),
+        ];
         const ownNames = new Set(Object.values(entry.identifierMap));
         const siblingNames = groupNames.get(entry.promptId);
         const siblingShape =

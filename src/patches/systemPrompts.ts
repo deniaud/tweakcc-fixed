@@ -11,6 +11,7 @@ import {
   detectUnicodeEscaping,
   extractBuildTime,
   leakedPromptPlaceholders,
+  leakedBuriedPlaceholders,
   pickMatchForSpliceAt,
 } from '../systemPromptSites';
 import { setAppliedHashes, computeMD5Hash } from '../systemPromptHashIndex';
@@ -274,11 +275,29 @@ export const applySystemPrompts = async (
         // literal. Anchoring on `\}` missed exactly those — CC 2.1.206 shipped
         // `${SYSTEM_PROMPT_AGENT_RESUMED_WAS_STOPPED_COMPLETED_VAR_2.finalText
         // ||"(no text output)"}` into the binary because of it.
-        const leaked = leakedPromptPlaceholders(
-          interpolatedContent,
-          prompt.content,
-          identifierMapUnion
-        );
+        // Slot-open guard (`${NAME…`) PLUS, for backtick template-literal
+        // splices only, a buried-identifier guard: a dangling human-name used as
+        // a bare reference INSIDE an interpolation expression (e.g.
+        // `${x.entries(CONTEXT_ENTRY_LIMIT)}`) ReferenceErrors at runtime just
+        // like a slot-open one, but is invisible to the slot-open regex. Inside
+        // a plain '…'/"…" string the same `${...}` is inert text, so the buried
+        // scan is gated on the backtick delimiter.
+        const leaked = [
+          ...new Set([
+            ...leakedPromptPlaceholders(
+              interpolatedContent,
+              prompt.content,
+              identifierMapUnion
+            ),
+            ...(delimiter === '`'
+              ? leakedBuriedPlaceholders(
+                  interpolatedContent,
+                  prompt.content,
+                  identifierMapUnion
+                )
+              : []),
+          ]),
+        ];
 
         // Every leaked name resolvable by a same-id sibling entry (and none by
         // this one) means the .md is authored against a different shape of
