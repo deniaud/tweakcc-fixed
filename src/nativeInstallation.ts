@@ -1474,20 +1474,57 @@ function repackELFSection(
     const pageSize = elfBinary.pageSize();
     const newContentSize = BigInt(newSectionData.length);
     const alignedNewSize = alignBigInt(newContentSize, pageSize);
-    const newVaddr = alignBigInt(elfBinary.nextVirtualAddress(), pageSize);
-    const offsetInSegment = newVaddr - rwSegment.virtualAddress;
-    const newFileOffset = rwSegment.fileOffset + offsetInSegment;
+    const oldBunFileOffset = BigInt(bunSection.fileOffset);
+
+    // Reuse the .bun section's own vaddr/file offset instead of appending a
+    // fresh copy at nextVirtualAddress(). The append strategy stranded the
+    // previous .bun bytes in the file AND opened a multi-hundred-MB gap (LIEF
+    // rounds nextVirtualAddress() up to a 256 MB boundary), so a single write
+    // pass grew the binary by ~the whole blob and repeated passes (e.g. a second
+    // downstream writer) accumulated without bound. Reusing the original slot
+    // reclaims the old bytes and grows the file only by the blob's own delta.
+    //
+    // This is safe as long as .bun is the last ALLOC region in the file: LIEF
+    // relocates the trailing non-alloc debug sections (.comment/.symtab/…) on
+    // its own. If some other ALLOC section sits at or beyond .bun (unexpected
+    // for current CC builds), fall back to the append strategy — runtime
+    // correctness is never traded for size.
+    const SHF_ALLOC = 0x2n;
+    const allocSectionAtOrAfterBun = elfBinary
+      .sections()
+      .some(
+        s =>
+          s.name !== '.bun' &&
+          (BigInt(s.flags) & SHF_ALLOC) !== 0n &&
+          BigInt(s.virtualAddress) >= oldBunSectionVaddr
+      );
+
+    let newVaddr: bigint;
+    let newFileOffset: bigint;
+    if (allocSectionAtOrAfterBun) {
+      newVaddr = alignBigInt(elfBinary.nextVirtualAddress(), pageSize);
+      newFileOffset =
+        rwSegment.fileOffset + (newVaddr - rwSegment.virtualAddress);
+    } else {
+      newVaddr = oldBunSectionVaddr;
+      newFileOffset = oldBunFileOffset;
+    }
+
     const oldRwFileEnd = rwSegment.fileOffset + rwSegment.fileSize;
     const extensionSize = newFileOffset + alignedNewSize - oldRwFileEnd;
 
-    if (extensionSize < 0n) {
+    // In the append path a negative extension means the target location lands
+    // inside existing segment data — a real overlap. In the in-place path a
+    // negative extension just means the new blob is smaller than the slot it
+    // reuses (a shrink), which needs no segment growth.
+    if (extensionSize < 0n && allocSectionAtOrAfterBun) {
       throw new Error(
         'New .bun location overlaps existing writable ELF segment'
       );
     }
 
     debug(
-      `repackELFSection: moving .bun to offset=0x${newFileOffset.toString(16)}, vaddr=0x${newVaddr.toString(16)}, size=0x${newContentSize.toString(16)}`
+      `repackELFSection: placing .bun at offset=0x${newFileOffset.toString(16)}, vaddr=0x${newVaddr.toString(16)}, size=0x${newContentSize.toString(16)} (${allocSectionAtOrAfterBun ? 'append' : 'in-place'})`
     );
 
     if (extensionSize > 0n) {
