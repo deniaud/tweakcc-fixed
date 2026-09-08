@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  chooseBunSectionPlacement,
   computeBunSectionPlacement,
   isClaudeModule,
   isPatchableJsModule,
@@ -150,6 +151,50 @@ describe('computeBunSectionPlacement', () => {
     expect(p.compact).toBe(false);
     expect(p.newVaddr % REAL_218.pageSize).toBe(0n);
     expect(p.newVaddr).toBe(0x20001000n); // align(0x20000800, page)
+  });
+});
+
+// Real Claude Code 2.1.226 native (ELF) numbers, read via readelf:
+//   RW PT_LOAD: vaddr 0x52db840, fileoff 0x50db840, filesz/memsz 0xcb217c0
+//   -> RW mem-end 0x11dfd000, which is also the topmost LOAD end
+//   .bun: vaddr 0x54e1000, fileoff 0x52e1000, size 0xc91bf7d (~211 MB), and
+//   every other ALLOC section sits BELOW it, so the slot is reusable.
+const REAL_226 = {
+  rwVirtualAddress: 0x52db840n,
+  rwVirtualSize: 0xcb217c0n,
+  rwFileOffset: 0x50db840n,
+  rwFileSize: 0xcb217c0n,
+  topmostLoadEnd: 0x11dfd000n,
+  nextVirtualAddress: 0x20000000n,
+  newContentSize: 0xc91d000n, // the blob plus tweakcc's injected JS
+  pageSize: 0x1000n,
+  bunVirtualAddress: 0x54e1000n,
+  bunFileOffset: 0x52e1000n,
+  allocSectionAtOrAfterBun: false,
+};
+
+describe('chooseBunSectionPlacement', () => {
+  it('reuses the .bun slot so a write pass does not copy the blob', () => {
+    const p = chooseBunSectionPlacement(REAL_226);
+
+    expect(p.inPlace).toBe(true);
+    expect(p.newVaddr).toBe(REAL_226.bunVirtualAddress);
+    expect(p.newFileOffset).toBe(REAL_226.bunFileOffset);
+    // The file grows by the blob's own delta (one page here), not by ~211 MB.
+    expect(p.extensionSize).toBe(0x1000n);
+    expect(p.extensionSize < REAL_226.newContentSize).toBe(true);
+  });
+
+  it('falls back when an ALLOC section sits at or above .bun', () => {
+    const blocked = { ...REAL_226, allocSectionAtOrAfterBun: true };
+    const p = chooseBunSectionPlacement(blocked);
+
+    expect(p.inPlace).toBe(false);
+    expect(p).toEqual(computeBunSectionPlacement(blocked));
+    // The contrast the reuse exists for: a fresh placement strands the old
+    // blob and appends a whole second copy, so the file grows by exactly the
+    // blob's size — the ~211 MB per write pass measured on 2.1.226.
+    expect(p.extensionSize).toBe(REAL_226.newContentSize);
   });
 });
 

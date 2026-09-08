@@ -1700,6 +1700,8 @@ export interface BunSectionPlacement {
   extensionSize: bigint;
   /** Placed directly after the writable segment (gap-free) rather than at nextVirtualAddress. */
   compact: boolean;
+  /** Reused `.bun`'s own slot instead of writing a second copy of the blob. */
+  inPlace: boolean;
 }
 
 /**
@@ -1758,7 +1760,58 @@ export function computeBunSectionPlacement(params: {
   const oldRwFileEnd = rwFileOffset + rwFileSize;
   const extensionSize = newFileOffset + alignedNewSize - oldRwFileEnd;
 
-  return { newVaddr, newFileOffset, alignedNewSize, extensionSize, compact };
+  return {
+    newVaddr,
+    newFileOffset,
+    alignedNewSize,
+    extensionSize,
+    compact,
+    inPlace: false,
+  };
+}
+
+/**
+ * Pick between reusing `.bun`'s existing slot and writing a fresh copy.
+ *
+ * Compact placement removes the zero-padding gap but still leaves the previous
+ * `.bun` bytes stranded in the file, so every write pass grows the binary by
+ * about the size of the blob (~210 MB on CC 2.1.226; two passes, tweakcc then
+ * cc-quote, would reach ~720 MB). Writing the rebuilt section back over the
+ * slot it already occupies reclaims those bytes, so the file grows only by the
+ * blob's own delta.
+ *
+ * That is only safe while `.bun` is the last ALLOC region: LIEF relocates the
+ * trailing non-alloc sections (.comment/.symtab/…) by itself, but an ALLOC
+ * section sitting at or above `.bun` would be overwritten. Anything else falls
+ * back to `computeBunSectionPlacement`, so runtime correctness is never traded
+ * for size.
+ */
+export function chooseBunSectionPlacement(params: {
+  rwVirtualAddress: bigint;
+  rwVirtualSize: bigint;
+  rwFileOffset: bigint;
+  rwFileSize: bigint;
+  topmostLoadEnd: bigint;
+  nextVirtualAddress: bigint;
+  newContentSize: bigint;
+  pageSize: bigint;
+  bunVirtualAddress: bigint;
+  bunFileOffset: bigint;
+  allocSectionAtOrAfterBun: boolean;
+}): BunSectionPlacement {
+  const { bunVirtualAddress, bunFileOffset, allocSectionAtOrAfterBun } = params;
+  if (allocSectionAtOrAfterBun) return computeBunSectionPlacement(params);
+
+  const alignedNewSize = alignBigInt(params.newContentSize, params.pageSize);
+  const oldRwFileEnd = params.rwFileOffset + params.rwFileSize;
+  return {
+    newVaddr: bunVirtualAddress,
+    newFileOffset: bunFileOffset,
+    alignedNewSize,
+    extensionSize: bunFileOffset + alignedNewSize - oldRwFileEnd,
+    compact: false,
+    inPlace: true,
+  };
 }
 
 /**
@@ -1854,7 +1907,17 @@ function repackELFSection(
       return end > max ? end : max;
     }, 0n);
 
-    const placement = computeBunSectionPlacement({
+    const SHF_ALLOC = 0x2n;
+    const allocSectionAtOrAfterBun = elfBinary
+      .sections()
+      .some(
+        s =>
+          s.name !== '.bun' &&
+          (BigInt(s.flags) & SHF_ALLOC) !== 0n &&
+          BigInt(s.virtualAddress) >= oldBunSectionVaddr
+      );
+
+    const placement = chooseBunSectionPlacement({
       rwVirtualAddress: BigInt(rwSegment.virtualAddress),
       rwVirtualSize: BigInt(rwSegment.virtualSize),
       rwFileOffset: BigInt(rwSegment.fileOffset),
@@ -1863,14 +1926,21 @@ function repackELFSection(
       nextVirtualAddress: BigInt(elfBinary.nextVirtualAddress()),
       newContentSize,
       pageSize: BigInt(pageSize),
+      bunVirtualAddress: oldBunSectionVaddr,
+      bunFileOffset: BigInt(bunSection.fileOffset),
+      allocSectionAtOrAfterBun,
     });
-    const { newVaddr, newFileOffset, extensionSize, compact } = placement;
+    const { newVaddr, newFileOffset, extensionSize, compact, inPlace } =
+      placement;
     debug(
-      `repackELFSection: ${compact ? 'compact' : 'fallback'} placement ` +
-        `(topmost LOAD ends at 0x${topmostLoadEnd.toString(16)})`
+      `repackELFSection: ${inPlace ? 'in-place' : compact ? 'compact' : 'fallback'} ` +
+        `placement (topmost LOAD ends at 0x${topmostLoadEnd.toString(16)})`
     );
 
-    if (extensionSize < 0n) {
+    // Reusing the slot with a smaller blob is a shrink, not an overlap: the
+    // segment already covers the range. Only a fresh placement landing inside
+    // existing segment data is a real error.
+    if (extensionSize < 0n && !inPlace) {
       throw new Error(
         'New .bun location overlaps existing writable ELF segment'
       );
